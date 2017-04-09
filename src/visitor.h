@@ -28,11 +28,11 @@ namespace pa037 {
     std::map<std::string, Expression> table;
   public:
 
-    Expression get(std::string name) const {
+    Expression get(const std::string& name) const {
       return table.at(name);
     }
 
-    void set(std::string name, Expression symbol) {
+    void set(const std::string& name, Expression symbol) {
       table.insert(std::make_pair(name, symbol));
     }
   };
@@ -50,8 +50,13 @@ namespace pa037 {
     antlrcpp::Any visitProgramFile(GrammarParser::ProgramFileContext* context) override;
     antlrcpp::Any visitExtdecl(GrammarParser::ExtdeclContext* context) override;
     antlrcpp::Any visitFunction(GrammarParser::FunctionContext* context) override;
+    antlrcpp::Any visitStatements(GrammarParser::StatementsContext* context) override;
     antlrcpp::Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx) override;
     antlrcpp::Any visitAddExpr(GrammarParser::AddExprContext* context) override;
+
+  private:
+    llvm::Function* makeFunction(const std::string& name,
+            GrammarParser::ArglistContext* arglist);
   };
 }
 

@@ -14,6 +14,9 @@ int main(int argc, const char* argv[]) {
   antlr4::CommonTokenStream tokens(&lexer);
   GrammarParser parser(&tokens);
 
+  if (parser.getNumberOfSyntaxErrors())
+    return 1;
+
   GrammarParser::ProgramFileContext* tree = parser.programFile();
   pa037::Visitor visitor;
   visitor.visitProgramFile(tree);

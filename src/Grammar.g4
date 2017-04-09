@@ -5,7 +5,7 @@ programFile:    (function | extdecl)+;
 function:       'def' name=ID '(' arglist ')' statements
         ;
 
-extdecl:        'extern' name=ID '(' arglist ')'
+extdecl:        'extern' name=ID '(' arglist ')' END
        ;
 
 statements:     '{' (statement (END statement)*)? '}'
