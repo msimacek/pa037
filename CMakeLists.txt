@@ -4,7 +4,13 @@ project (Project)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
 
-set (CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes")
+
+find_package(LLVM REQUIRED CONFIG)
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+llvm_map_components_to_libnames(llvm_libs support core)
 
 find_package(Antlr)
 include_directories(${ANTLR_INCLUDE_DIRS})
@@ -26,4 +32,4 @@ add_custom_command(
 include_directories(${PARSER_DIR})
 
 add_executable(compiler src/compiler.cpp src/visitor.cpp ${PARSER_FILES})
-target_link_libraries(compiler antlr4-runtime)
+target_link_libraries(compiler antlr4-runtime ${llvm_libs})

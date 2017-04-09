@@ -1,40 +1,46 @@
 grammar Grammar;
 
-programFile:    function+;
+programFile:    (function | extdecl)+;
 
-statements:     '{' statement* '}'
-          |     statement
-          ;
-
-statement:      expression END                     # ExprStatement
-         |      declaration END                    # DeclStatement
-         |      assignment END                     # AssignStatement
-         ;
-
-declaration:    'var' ID
-           ;
-
-assignment:     ID '=' expression
-          ;
-
-expression:     expression op=('*' | '/') expression   # MulDivExpr
-          |     expression op=('+' | '-') expression   # AddSubExpr
-          |     '(' expression ')'                  # ParenExpr
-          |     literal                             # LiteralExpr
-          |     call                                # CallExpr
-          |     ID                                  # IdentifierExpr
-          ;
-
-function:       'def' name=ID '(' arglist? ')' statements
+function:       'def' name=ID '(' arglist ')' statements
         ;
 
-arglist:        ID (',' ID)*
+extdecl:        'extern' name=ID '(' arglist ')'
+       ;
+
+statements:     '{' (statement (END statement)*)? '}'
+          |     statement END
+          ;
+
+statement:      expression                     # ExprStatement
+         |      declaration                    # DeclStatement
+         |      assignment                     # AssignStatement
+         ;
+
+declaration:    'var' name=ID
+           ;
+
+assignment:     name=ID '=' expression
+          ;
+
+expression:     expression '*' expression   # MulExpr
+          |     expression '/' expression   # DivExpr
+          |     expression '+' expression   # AddExpr
+          |     expression '-' expression   # SubExpr
+          |     '(' expression ')'          # ParenExpr
+          |     literal                     # LiteralExpr
+          |     call                        # CallExpr
+          |     ID                          # IdentifierExpr
+          ;
+
+arglist:        (ID (',' ID)*)?
        ;
 
 call:           ID '(' (expression ( ',' expression)*)? ')'
     ;
 
-literal:        INTEGER;
+literal:        value=INTEGER         # IntegerLiteral
+       ;
 
 INTEGER:        [0-9]+;
 ID:             [a-zA-Z_][a-zA-Z_0-9]*;
