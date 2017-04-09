@@ -1,0 +1,5 @@
+set(ANTLR_ROOT "/home/msimacek/libs/antlr4-cpp" CACHE STRING "Install path" FORCE)
+set(ANTLR_INCLUDE_DIRS "${ANTLR_ROOT}/include/antlr4-runtime")
+set(ANTLR_LIBRARY_DIRS "${ANTLR_ROOT}/lib")
+set(ANTLR_DEFINITIONS  "")
+set(ANTLR_FOUND "FALSE")
