@@ -25,7 +25,7 @@ expression:     expression op=('*' | '/') expression   # MulDivExpr
           |     ID                                  # IdentifierExpr
           ;
 
-function:       'def' ID '(' arglist? ')' statements
+function:       'def' name=ID '(' arglist? ')' statements
         ;
 
 arglist:        ID (',' ID)*

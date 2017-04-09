@@ -3,7 +3,8 @@
 #include "antlr4-runtime.h"
 #include "GrammarLexer.h"
 #include "GrammarParser.h"
-#include "GrammarBaseListener.h"
+
+#include "visitor.h"
 
 int main(int argc, const char* argv[]) {
   std::ifstream stream;
@@ -12,6 +13,10 @@ int main(int argc, const char* argv[]) {
   GrammarLexer lexer(&input);
   antlr4::CommonTokenStream tokens(&lexer);
   GrammarParser parser(&tokens);
+
+  GrammarParser::ProgramFileContext* tree = parser.programFile();
+  pa037::Visitor visitor;
+  visitor.visitProgramFile(tree);
 
   return 0;
 }
