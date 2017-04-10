@@ -11,6 +11,11 @@ using namespace std;
 using namespace antlrcpp;
 using namespace pa037;
 
+void error(antlr4::ParserRuleContext* context, const std::string& message) {
+  cerr << message << endl;
+  exit(2);
+}
+
 antlrcpp::Any Visitor::visitProgramFile(GrammarParser::ProgramFileContext* context) {
   llvm::Module mod("main", llvmContext);
   module = &mod;
@@ -35,23 +40,26 @@ llvm::Function* Visitor::makeFunction(const std::string& name,
 antlrcpp::Any Visitor::visitExtdecl(GrammarParser::ExtdeclContext* context) {
   auto name = context->name->getText();
   llvm::Function* function = makeFunction(name, context->arglist());
-  symbolTable.set(name, Expression(FUNCTION, function));
+  symbolTable[name] = Expression(FUNCTION, function);
   return Any();
 }
 
 Any Visitor::visitFunction(GrammarParser::FunctionContext* context) {
   auto name = context->name->getText();
   llvm::Function* function = makeFunction(name, context->arglist());
-  symbolTable.set(name, Expression(FUNCTION, function));
+  symbolTable[name] = Expression(FUNCTION, function);
   llvm::BasicBlock *block = llvm::BasicBlock::Create(llvmContext, "entry", function);
   builder.SetInsertPoint(block);
-//  auto it1 = function->args().begin();
-//  auto it2 = context->arglist()->ID().begin();
-//  for (; it2 != context->arglist()->ID().end(); ++it1, ++it2) {
-//    symbolTable.set((*it2)->getText(), Expression(INTEGER, &*it1));
-//  }
+  auto it = function->args().begin();
+  for (auto arg : context->arglist()->ID()) {
+    auto& fnArg = *it;
+    fnArg.setName(arg->getText());
+    symbolTable[arg->getText()] = Expression(INTEGER, &fnArg);
+    it++;
+  }
   Expression expr = visit(context->statements());
-  builder.CreateRet(expr.value);
+  if (expr.type != INVALID)
+    builder.CreateRet(expr.value);
   return Any();
 }
 
@@ -70,11 +78,30 @@ antlrcpp::Any Visitor::visitIntegerLiteral(GrammarParser::IntegerLiteralContext*
           llvm::ConstantInt::get(llvmContext, llvm::APInt(32, value, true))));
 }
 
-antlrcpp::Any Visitor::visitAddExpr(GrammarParser::AddExprContext* context) {
-  Expression left = visit(context->expression(0));
-  Expression right = visit(context->expression(1));
-  return Any(Expression(INTEGER,
-          builder.CreateAdd(left.value, right.value)));
+#define visitArithExpr(name, op) \
+antlrcpp::Any Visitor::visit##name##Expr(GrammarParser::name##ExprContext* context) { \
+  Expression left = visit(context->expression(0)); \
+  Expression right = visit(context->expression(1)); \
+  if (left.type == INTEGER && right.type == INTEGER) { \
+    return Any(Expression(INTEGER, builder.Create##op(left.value, right.value))); \
+  } else { \
+    return Any(Expression(INVALID)); \
+  } \
 }
 
+visitArithExpr(Add, Add);
+visitArithExpr(Sub, Sub);
+visitArithExpr(Mul, Mul);
+visitArithExpr(Div, SDiv);
+
+antlrcpp::Any Visitor::visitDeclaration(GrammarParser::DeclarationContext* context) {
+  //symbolTable[context->ID()]
+}
+
+antlrcpp::Any Visitor::visitIdentifierExpr(GrammarParser::IdentifierExprContext* context) {
+  const Expression& var = symbolTable[context->ID()->getText()];
+  if (var.type == UNDEFINED)
+    error(context, "Undefined variable");
+  return Any(Expression(var));
+}
 

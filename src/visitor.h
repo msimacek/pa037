@@ -11,14 +11,18 @@
 namespace pa037 {
 
   enum Type {
+    UNDEFINED,
+    INVALID,
     FUNCTION,
     INTEGER,
   };
 
   struct Expression {
-    Type type;
+    Type type = UNDEFINED;
     llvm::Value* value;
 
+    Expression() {}
+    Expression(Type) : type(type) {}
     Expression(Type type, llvm::Value* value) : type(type), value(value) {
     }
   };
@@ -28,12 +32,8 @@ namespace pa037 {
     std::map<std::string, Expression> table;
   public:
 
-    Expression get(const std::string& name) const {
-      return table.at(name);
-    }
-
-    void set(const std::string& name, Expression symbol) {
-      table.insert(std::make_pair(name, symbol));
+    Expression& operator[](const std::string& name) {
+      return table[name];
     }
   };
 
@@ -53,6 +53,12 @@ namespace pa037 {
     antlrcpp::Any visitStatements(GrammarParser::StatementsContext* context) override;
     antlrcpp::Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx) override;
     antlrcpp::Any visitAddExpr(GrammarParser::AddExprContext* context) override;
+    antlrcpp::Any visitSubExpr(GrammarParser::SubExprContext* context) override;
+    antlrcpp::Any visitMulExpr(GrammarParser::MulExprContext* context) override;
+    antlrcpp::Any visitDivExpr(GrammarParser::DivExprContext* context) override;
+    antlrcpp::Any visitDeclaration(GrammarParser::DeclarationContext* context) override;
+    antlrcpp::Any visitIdentifierExpr(GrammarParser::IdentifierExprContext* context) override;
+
 
   private:
     llvm::Function* makeFunction(const std::string& name,
