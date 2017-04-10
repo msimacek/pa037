@@ -8,7 +8,7 @@ function:       'def' name=ID '(' arglist ')' statements
 extdecl:        'extern' name=ID '(' arglist ')' END
        ;
 
-statements:     '{' (statement (END statement)*)? '}'
+statements:     '{' (statement END)* '}'
           |     statement END
           ;
 
@@ -45,7 +45,5 @@ literal:        value=INTEGER         # IntegerLiteral
 INTEGER:        [0-9]+;
 ID:             [a-zA-Z_][a-zA-Z_0-9]*;
 
-END:            ';'
-                | '\r'? '\n';
-
-WS:             [ \t] -> skip;
+END:            ';';
+WS:             [ \t\r\n] -> skip;
