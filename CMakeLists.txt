@@ -31,5 +31,5 @@ add_custom_command(
 )
 include_directories(${PARSER_DIR})
 
-add_executable(compiler src/compiler.cpp src/visitor.cpp ${PARSER_FILES})
+add_executable(compiler src/compiler.cpp ${PARSER_FILES})
 target_link_libraries(compiler antlr4-runtime ${llvm_libs})
