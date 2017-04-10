@@ -21,7 +21,7 @@ using namespace std;
 namespace pa037 {
 
 enum Type {
-    INVALID, FUNCTION, INTEGER,
+    INVALID, FUNCTION, INTEGER, BOOLEAN
 };
 
 struct Expression {
@@ -50,47 +50,59 @@ private:
     llvm::Module* module;
     llvm::Function* function;
     SymbolTable symbolTable;
+    map<std::string, Type> types;
 public:
 
     Visitor() :
-            builder(llvmContext), module(nullptr), function(nullptr) {
+            builder(llvmContext), module(nullptr), function(nullptr), types { {
+                    "int", INTEGER }, { "bool", BOOLEAN } } {
     }
 
 #define error(message_expr) do { \
     cerr << "line " << context->start->getLine() << ": " << message_expr << endl; \
     exit(2); \
+    throw 0; \
 } while(0)
 
     Any visitProgramFile(GrammarParser::ProgramFileContext* context) override {
         llvm::Module mod("main", llvmContext);
         module = &mod;
         GrammarBaseVisitor::visitProgramFile(context);
-        module->print(llvm::errs(), nullptr);
+        module->print(llvm::outs(), nullptr);
         return Any();
     }
 
-    Any visitExtdecl(GrammarParser::ExtdeclContext* context) override {
-        auto name = context->name->getText();
-        llvm::Function* function = makeFunction(name, context->arglist());
+    Any visitFndecl(GrammarParser::FndeclContext* context) override {
+        const string& name = context->name->getText();
+        std::vector<llvm::Type*> argtypes;
+        for (auto arg : context->arglist()->arg()) {
+            auto type = getType(context, arg->type->getText());
+            argtypes.push_back(type.second);
+        }
+        auto type = getType(context, context->type->getText());
+        llvm::FunctionType *functionType = llvm::FunctionType::get(type.second,
+                argtypes, false);
+
+        llvm::Function *function = llvm::Function::Create(functionType,
+                llvm::Function::ExternalLinkage, name, module);
         symbolTable[name] = make_shared<Expression>(FUNCTION, function);
-        return Any();
+        return function;
     }
 
     Any visitFunction(GrammarParser::FunctionContext* context) override {
-        auto name = context->name->getText();
-        function = makeFunction(name, context->arglist());
-        symbolTable[name] = make_shared<Expression>(FUNCTION, function);
+        llvm::Function* function = visitFndecl(context->fndecl());
         llvm::BasicBlock *block = llvm::BasicBlock::Create(llvmContext, "entry",
                 function);
         builder.SetInsertPoint(block);
         auto it = function->args().begin();
-        for (auto arg : context->arglist()->ID()) {
-            const string& argname = arg->getText();
+        for (auto arg : context->fndecl()->arglist()->arg()) {
+            const string& argname = arg->name->getText();
+            auto type = getType(context, arg->type->getText());
             auto& fnArg = *it;
             fnArg.setName(argname);
             auto alloc = builder.CreateAlloca(fnArg.getType());
             builder.CreateStore(&fnArg, alloc);
-            symbolTable[argname] = make_shared<Expression>(INTEGER, alloc);
+            symbolTable[argname] = make_shared<Expression>(type.first, alloc);
             it++;
         }
         shared_ptr<Expression> expr = visit(context->statements());
@@ -112,47 +124,65 @@ public:
     Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx)
             override {
         long long value = std::stoi(ctx->value->getText());
-        return Any(
-                make_shared<Expression>(INTEGER,
-                        llvm::ConstantInt::get(llvmContext,
-                                llvm::APInt(32, value, true))));
+        return make_shared<Expression>(INTEGER,
+                llvm::ConstantInt::get(llvmContext,
+                        llvm::APInt(32, value, true)));
     }
 
-#define visitArithExpr(name, op) \
-Any visit##name##Expr(GrammarParser::name##ExprContext* context) { \
-  shared_ptr<Expression> left = visit(context->expression(0)); \
-  shared_ptr<Expression> right = visit(context->expression(1)); \
-  if (left->type == INTEGER && right->type == INTEGER) { \
-    return Any(make_shared<Expression>(INTEGER, builder.Create##op(left->value, right->value))); \
-  } else { \
-    return Any(make_shared<Expression>(INVALID)); \
-  } \
-}
+    Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* ctx)
+            override {
+        int value = (ctx->value->getText() == "true") ? 1 : 0;
+        return make_shared<Expression>(BOOLEAN,
+                llvm::ConstantInt::get(llvmContext,
+                        llvm::APInt(1, value, true)));
+    }
 
-    //    Any visitAddExpr(GrammarParser::AddExprContext* context) override;
-    //    Any visitSubExpr(GrammarParser::SubExprContext* context) override;
-    //    Any visitMulExpr(GrammarParser::MulExprContext* context) override;
-    //    Any visitDivExpr(GrammarParser::DivExprContext* context) override;
-    visitArithExpr(Add, Add)
-    visitArithExpr(Sub, Sub)
-    visitArithExpr(Mul, Mul)
-    visitArithExpr(Div, SDiv)
+    Any visitArithExpr(GrammarParser::ArithExprContext* context) override {
+        shared_ptr<Expression> left = visit(context->expression(0));
+        shared_ptr<Expression> right = visit(context->expression(1));
+        char op = context->op->getText()[0];
+        Type type;
+        if (left->type != right->type)
+            error("Incompatible types");
+        type = left->type;
+        if (type != INTEGER)
+            error("Unsupported type for " << op);
+        llvm::Value* value;
+        switch (op) {
+        case '+':
+            value = builder.CreateAdd(left->value, right->value);
+            break;
+        case '-':
+            value = builder.CreateSub(left->value, right->value);
+            break;
+        case '*':
+            value = builder.CreateMul(left->value, right->value);
+            break;
+        case '/':
+            value = builder.CreateSDiv(left->value, right->value);
+            break;
+        default:
+            error("BUG Unknown operator");
+        }
+        return make_shared<Expression>(type, value);
+    }
 
     Any visitDeclaration(GrammarParser::DeclarationContext* context) override {
-        const auto& name = context->name->getText();
-        auto alloc = builder.CreateAlloca(llvm::Type::getInt32Ty(llvmContext),
-                nullptr, name);
-        symbolTable[name] = make_shared<Expression>(INTEGER, alloc);
+        shared_ptr<Expression> initializer = nullptr;
+        if (context->expression())
+            initializer = visit(context->expression());
+        allocateVar(context, context->name->getText(), context->type->getText(),
+                initializer);
         return Any();
     }
 
-    Any visitIdentifierExpr(GrammarParser::IdentifierExprContext* context)
-            override {
+    Any visitIdentifier(GrammarParser::IdentifierContext* context) override {
         const string& name = context->ID()->getText();
         auto var = symbolTable[name];
         if (var == nullptr)
             error("Undefined variable " << name);
-        return Any(var);
+        return make_shared<Expression>(var->type,
+                builder.CreateLoad(var->value));
     }
 
     Any visitAssignment(GrammarParser::AssignmentContext* context) override {
@@ -167,18 +197,39 @@ Any visit##name##Expr(GrammarParser::name##ExprContext* context) { \
 
 private:
 
-    llvm::Function* makeFunction(const std::string& name,
-            GrammarParser::ArglistContext* arglist) {
-        std::vector<llvm::Type*> argtypes(arglist->ID().size(),
-                llvm::Type::getInt32Ty(llvmContext));
-        llvm::FunctionType *functionType = llvm::FunctionType::get(
-                llvm::Type::getInt32Ty(llvmContext), argtypes, false);
-
-        llvm::Function *function = llvm::Function::Create(functionType,
-                llvm::Function::ExternalLinkage, name, module);
-        return function;
+    pair<Type, llvm::Type*> getType(antlr4::ParserRuleContext* context,
+            const string& typeName) {
+        auto it = types.find(typeName);
+        if (it == types.end())
+            error("Type not found: " << typeName);
+        llvm::Type* lltype;
+        switch (it->second) {
+        case INTEGER:
+            lltype = llvm::Type::getInt32Ty(llvmContext);
+            break;
+        case BOOLEAN:
+            lltype = llvm::Type::getInt1Ty(llvmContext);
+            break;
+        default:
+            error("Unsupported type");
+        }
+        return make_pair(it->second, lltype);
     }
-};
+
+    void allocateVar(antlr4::ParserRuleContext* context, const string& name,
+            const string& typeName,
+            shared_ptr<Expression> initializer = nullptr) {
+        auto typePair = getType(context, typeName);
+        auto alloc = builder.CreateAlloca(typePair.second, nullptr, name);
+        if (initializer) {
+            if (initializer->type != typePair.first)
+                error("Incompatible type in initialization");
+            builder.CreateStore(initializer->value, alloc);
+        }
+        symbolTable[name] = make_shared<Expression>(typePair.first, alloc);
+    }
+}
+;
 }
 
 int main(int argc, const char* argv[]) {
@@ -189,10 +240,11 @@ int main(int argc, const char* argv[]) {
     antlr4::CommonTokenStream tokens(&lexer);
     GrammarParser parser(&tokens);
 
+    GrammarParser::ProgramFileContext* tree = parser.programFile();
+
     if (parser.getNumberOfSyntaxErrors())
         return 1;
 
-    GrammarParser::ProgramFileContext* tree = parser.programFile();
     pa037::Visitor visitor;
     visitor.visitProgramFile(tree);
 

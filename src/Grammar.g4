@@ -2,11 +2,14 @@ grammar Grammar;
 
 programFile:    (function | extdecl)+;
 
-function:       'def' name=ID '(' arglist ')' statements
+function:       'def' fndecl statements
         ;
 
-extdecl:        'extern' name=ID '(' arglist ')' END
+extdecl:        'extern' fndecl END
        ;
+
+fndecl:         name=ID '(' arglist ')' ':' type=ID
+      ;
 
 statements:     '{' (statement END)* '}'
           |     statement END
@@ -17,30 +20,34 @@ statement:      expression                     # ExprStatement
          |      assignment                     # AssignStatement
          ;
 
-declaration:    'var' name=ID
+declaration:    'var' name=ID ':' type=ID ('=' expression)?
            ;
 
 assignment:     name=ID '=' expression
           ;
 
-expression:     expression '*' expression   # MulExpr
-          |     expression '/' expression   # DivExpr
-          |     expression '+' expression   # AddExpr
-          |     expression '-' expression   # SubExpr
-          |     '(' expression ')'          # ParenExpr
-          |     literal                     # LiteralExpr
-          |     call                        # CallExpr
-          |     ID                          # IdentifierExpr
+expression:     expression op=('*' | '/') expression # ArithExpr
+          |     expression op=('+' | '-') expression # ArithExpr
+          |     '(' expression ')'                   # Expr
+          |     literal                              # Expr
+          |     call                                 # Expr
+          |     identifier                           # Expr
           ;
 
-arglist:        (ID (',' ID)*)?
+arglist:        (arg (',' arg)*)?
        ;
+
+arg:            name=ID ':' type=ID
+   ;
 
 call:           ID '(' (expression ( ',' expression)*)? ')'
     ;
 
-literal:        value=INTEGER         # IntegerLiteral
+literal:        value=INTEGER             # IntegerLiteral
+       |        value=('true' | 'false')  # BooleanLiteral
        ;
+
+identifier:     ID;
 
 INTEGER:        [0-9]+;
 ID:             [a-zA-Z_][a-zA-Z_0-9]*;
