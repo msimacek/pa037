@@ -20,16 +20,27 @@ using namespace std;
 
 namespace pa037 {
 
-enum Type {
-    INVALID, FUNCTION, INTEGER, BOOLEAN
+class Type {
+public:
+    llvm::Type* lltype;
+    Type(llvm::Type* lltype) :
+            lltype(lltype) {
+    }
 };
 
-struct Expression {
-    Type type;
-    llvm::Value* value;
+enum ValueCategory {
+    RVALUE, LVALUE
+};
 
-    Expression(Type type, llvm::Value* value = nullptr) :
-            type(type), value(value) {
+class Expression {
+public:
+    shared_ptr<Type> type;
+    llvm::Value* value;
+    ValueCategory category;
+
+    Expression(shared_ptr<Type> type, llvm::Value* value = nullptr,
+            ValueCategory category = RVALUE) :
+            type(type), value(value), category(category) {
     }
 };
 
@@ -43,19 +54,35 @@ public:
     }
 };
 
+class Function {
+public:
+    llvm::Function* llfunction;
+    Function(llvm::Function* llfunction) :
+            llfunction(llfunction) {
+    }
+};
+
 class Visitor: public GrammarBaseVisitor {
 private:
     llvm::LLVMContext llvmContext;
     llvm::IRBuilder<> builder;
     llvm::Module* module;
-    llvm::Function* function;
+    llvm::Function* currentFunction;
     SymbolTable symbolTable;
-    map<std::string, Type> types;
+    map<std::string, shared_ptr<Function>> functions;
+
+    shared_ptr<Type> intType = make_shared<Type>(
+            llvm::Type::getInt32Ty(llvmContext));
+    shared_ptr<Type> boolType = make_shared<Type>(
+            llvm::Type::getInt1Ty(llvmContext));
+
+    map<std::string, shared_ptr<Type>> types { { "int", intType }, { "bool",
+            boolType } };
+
 public:
 
     Visitor() :
-            builder(llvmContext), module(nullptr), function(nullptr), types { {
-                    "int", INTEGER }, { "bool", BOOLEAN } } {
+            builder(llvmContext), module(nullptr), currentFunction(nullptr) {
     }
 
 #define error(message_expr) do { \
@@ -77,15 +104,15 @@ public:
         std::vector<llvm::Type*> argtypes;
         for (auto arg : context->arglist()->arg()) {
             auto type = getType(context, arg->type->getText());
-            argtypes.push_back(type.second);
+            argtypes.push_back(type->lltype);
         }
         auto type = getType(context, context->type->getText());
-        llvm::FunctionType *functionType = llvm::FunctionType::get(type.second,
+        llvm::FunctionType *functionType = llvm::FunctionType::get(type->lltype,
                 argtypes, false);
 
         llvm::Function *function = llvm::Function::Create(functionType,
                 llvm::Function::ExternalLinkage, name, module);
-        symbolTable[name] = make_shared<Expression>(FUNCTION, function);
+        //symbolTable[name] = make_shared<Expression>(FUNCTION, function);
         return function;
     }
 
@@ -102,12 +129,11 @@ public:
             fnArg.setName(argname);
             auto alloc = builder.CreateAlloca(fnArg.getType());
             builder.CreateStore(&fnArg, alloc);
-            symbolTable[argname] = make_shared<Expression>(type.first, alloc);
+            symbolTable[argname] = make_shared<Expression>(type, alloc);
             it++;
         }
         shared_ptr<Expression> expr = visit(context->statements());
-        if (expr->type != INVALID)
-            builder.CreateRet(expr->value);
+        builder.CreateRet(expr->value);
         llvm::verifyFunction(*function);
         function = nullptr;
         return Any();
@@ -124,7 +150,7 @@ public:
     Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx)
             override {
         long long value = std::stoi(ctx->value->getText());
-        return make_shared<Expression>(INTEGER,
+        return make_shared<Expression>(intType,
                 llvm::ConstantInt::get(llvmContext,
                         llvm::APInt(32, value, true)));
     }
@@ -132,7 +158,7 @@ public:
     Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* ctx)
             override {
         int value = (ctx->value->getText() == "true") ? 1 : 0;
-        return make_shared<Expression>(BOOLEAN,
+        return make_shared<Expression>(boolType,
                 llvm::ConstantInt::get(llvmContext,
                         llvm::APInt(1, value, true)));
     }
@@ -141,11 +167,10 @@ public:
         shared_ptr<Expression> left = visit(context->expression(0));
         shared_ptr<Expression> right = visit(context->expression(1));
         char op = context->op->getText()[0];
-        Type type;
         if (left->type != right->type)
             error("Incompatible types");
-        type = left->type;
-        if (type != INTEGER)
+        auto type = left->type;
+        if (type != intType)
             error("Unsupported type for " << op);
         llvm::Value* value;
         switch (op) {
@@ -182,7 +207,7 @@ public:
         if (var == nullptr)
             error("Undefined variable " << name);
         return make_shared<Expression>(var->type,
-                builder.CreateLoad(var->value));
+                builder.CreateLoad(var->value), LVALUE);
     }
 
     Any visitAssignment(GrammarParser::AssignmentContext* context) override {
@@ -197,39 +222,27 @@ public:
 
 private:
 
-    pair<Type, llvm::Type*> getType(antlr4::ParserRuleContext* context,
+    shared_ptr<Type> getType(antlr4::ParserRuleContext* context,
             const string& typeName) {
         auto it = types.find(typeName);
         if (it == types.end())
             error("Type not found: " << typeName);
-        llvm::Type* lltype;
-        switch (it->second) {
-        case INTEGER:
-            lltype = llvm::Type::getInt32Ty(llvmContext);
-            break;
-        case BOOLEAN:
-            lltype = llvm::Type::getInt1Ty(llvmContext);
-            break;
-        default:
-            error("Unsupported type");
-        }
-        return make_pair(it->second, lltype);
+        return it->second;
     }
 
     void allocateVar(antlr4::ParserRuleContext* context, const string& name,
             const string& typeName,
             shared_ptr<Expression> initializer = nullptr) {
-        auto typePair = getType(context, typeName);
-        auto alloc = builder.CreateAlloca(typePair.second, nullptr, name);
+        auto type = getType(context, typeName);
+        auto alloc = builder.CreateAlloca(type->lltype, nullptr, name);
         if (initializer) {
-            if (initializer->type != typePair.first)
+            if (initializer->type != type)
                 error("Incompatible type in initialization");
             builder.CreateStore(initializer->value, alloc);
         }
-        symbolTable[name] = make_shared<Expression>(typePair.first, alloc);
+        symbolTable[name] = make_shared<Expression>(type, alloc);
     }
-}
-;
+};
 }
 
 int main(int argc, const char* argv[]) {
