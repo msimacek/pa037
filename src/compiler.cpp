@@ -263,11 +263,26 @@ public:
     }
 
     Any visitDeclaration(GrammarParser::DeclarationContext* context) override {
+        const string& name = context->name->getText();
         shared_ptr<Expression> initializer = nullptr;
         if (context->expression())
             initializer = visit(context->expression());
-        allocateVar(context, context->name->getText(), context->type->getText(),
-                initializer);
+        shared_ptr<Type> type;
+        if (context->type) {
+            type = getType(context, context->type->getText());
+        } else if (initializer) {
+            type = initializer->type;
+        } else {
+            error(
+                    "Variable declaration needs to have a type or an initializer");
+        }
+        auto alloc = builder.CreateAlloca(type->lltype, nullptr, name);
+        if (initializer) {
+            if (initializer->type != type)
+                error("Incompatible type in initialization");
+            builder.CreateStore(initializer->value, alloc);
+        }
+        symbolTable[name] = make_shared<Expression>(type, alloc);
         return Any();
     }
 
@@ -298,19 +313,6 @@ private:
         if (it == types.end())
             error("Type not found: " << typeName);
         return it->second;
-    }
-
-    void allocateVar(antlr4::ParserRuleContext* context, const string& name,
-            const string& typeName,
-            shared_ptr<Expression> initializer = nullptr) {
-        auto type = getType(context, typeName);
-        auto alloc = builder.CreateAlloca(type->lltype, nullptr, name);
-        if (initializer) {
-            if (initializer->type != type)
-                error("Incompatible type in initialization");
-            builder.CreateStore(initializer->value, alloc);
-        }
-        symbolTable[name] = make_shared<Expression>(type, alloc);
     }
 };
 }

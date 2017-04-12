@@ -20,7 +20,7 @@ statement:      expression                     # ExprStatement
          |      assignment                     # AssignStatement
          ;
 
-declaration:    'var' name=ID ':' type=ID ('=' expression)?
+declaration:    'var' name=ID (':' type=ID)? ('=' expression)?
            ;
 
 assignment:     name=ID '=' expression
