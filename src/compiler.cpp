@@ -125,10 +125,11 @@ public:
         llvm::FunctionType *functionType = llvm::FunctionType::get(type->lltype,
                 lltypes, false);
 
-        llvm::Function *function = llvm::Function::Create(functionType,
+        llvm::Function *llfunction = llvm::Function::Create(functionType,
                 llvm::Function::ExternalLinkage, name, module);
-        //symbolTable[name] = make_shared<Expression>(FUNCTION, function);
-        return make_shared<Function>(function, type, args);
+        shared_ptr<Function> function = make_shared<Function>(llfunction, type, args);
+        functions[name] = function;
+        return function;
     }
 
     Any visitFunction(GrammarParser::FunctionContext* context) override {
@@ -153,6 +154,29 @@ public:
         llvm::verifyFunction(*function->llfunction);
         function = nullptr;
         return Any();
+    }
+
+    Any visitCall(GrammarParser::CallContext* context) override {
+        const string& name = context->name->getText();
+        shared_ptr<Function> function = functions[name];
+        if (!function)
+            error("Function " << name << "not declared");
+        vector<llvm::Value*> args;
+        vector<shared_ptr<Type>> expectedTypes;
+        for (auto arg:function->args) {
+            expectedTypes.push_back(arg->type);
+        }
+        vector<shared_ptr<Type>> actualTypes;
+        for (auto expr:context->expression()) {
+            shared_ptr<Expression> arg = visit(expr);
+            args.push_back(arg->value);
+            actualTypes.push_back(arg->type);
+        }
+        if (actualTypes != expectedTypes) {
+            error("Incorect function arguments");
+        }
+        llvm::Value* value = builder.CreateCall(function->llfunction, args);
+        return make_shared<Expression>(function->type, value);
     }
 
     Any visitStatements(GrammarParser::StatementsContext* context) override {

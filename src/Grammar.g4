@@ -43,7 +43,7 @@ arglist:        (arg (',' arg)*)?
 arg:            name=ID ':' type=ID
    ;
 
-call:           ID '(' (expression ( ',' expression)*)? ')'
+call:           name=ID '(' (expression ( ',' expression)*)? ')'
     ;
 
 literal:        value=INTEGER             # IntegerLiteral
