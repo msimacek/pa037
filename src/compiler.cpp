@@ -54,11 +54,23 @@ public:
     }
 };
 
+class Argument {
+public:
+    string name;
+    shared_ptr<Type> type;
+    Argument(const string& name, shared_ptr<Type> type) :
+            name(name), type(type) {
+    }
+};
+
 class Function {
 public:
     llvm::Function* llfunction;
-    Function(llvm::Function* llfunction) :
-            llfunction(llfunction) {
+    shared_ptr<Type> type;
+    vector<shared_ptr<Argument>> args;
+    Function(llvm::Function* llfunction, shared_ptr<Type> type,
+            vector<shared_ptr<Argument>> args) :
+            llfunction(llfunction), type(type), args(args) {
     }
 };
 
@@ -101,40 +113,44 @@ public:
 
     Any visitFndecl(GrammarParser::FndeclContext* context) override {
         const string& name = context->name->getText();
-        std::vector<llvm::Type*> argtypes;
+        vector<shared_ptr<Argument>> args;
+        vector<llvm::Type*> lltypes;
         for (auto arg : context->arglist()->arg()) {
-            auto type = getType(context, arg->type->getText());
-            argtypes.push_back(type->lltype);
+            auto argType = getType(context, arg->type->getText());
+            args.push_back(
+                    make_shared<Argument>(arg->name->getText(), argType));
+            lltypes.push_back(argType->lltype);
         }
         auto type = getType(context, context->type->getText());
         llvm::FunctionType *functionType = llvm::FunctionType::get(type->lltype,
-                argtypes, false);
+                lltypes, false);
 
         llvm::Function *function = llvm::Function::Create(functionType,
                 llvm::Function::ExternalLinkage, name, module);
         //symbolTable[name] = make_shared<Expression>(FUNCTION, function);
-        return function;
+        return make_shared<Function>(function, type, args);
     }
 
     Any visitFunction(GrammarParser::FunctionContext* context) override {
-        llvm::Function* function = visitFndecl(context->fndecl());
+        shared_ptr<Function> function = visitFndecl(context->fndecl());
         llvm::BasicBlock *block = llvm::BasicBlock::Create(llvmContext, "entry",
-                function);
+                function->llfunction);
         builder.SetInsertPoint(block);
-        auto it = function->args().begin();
-        for (auto arg : context->fndecl()->arglist()->arg()) {
-            const string& argname = arg->name->getText();
-            auto type = getType(context, arg->type->getText());
+        auto it = function->llfunction->args().begin();
+        for (auto arg : function->args) {
             auto& fnArg = *it;
-            fnArg.setName(argname);
-            auto alloc = builder.CreateAlloca(fnArg.getType());
+            fnArg.setName(arg->name);
+            auto alloc = builder.CreateAlloca(fnArg.getType(), nullptr,
+                    arg->name + "_var");
             builder.CreateStore(&fnArg, alloc);
-            symbolTable[argname] = make_shared<Expression>(type, alloc);
+            symbolTable[arg->name] = make_shared<Expression>(arg->type, alloc);
             it++;
         }
         shared_ptr<Expression> expr = visit(context->statements());
+        if (expr->type != function->type)
+            error("Return value doesn't match type");
         builder.CreateRet(expr->value);
-        llvm::verifyFunction(*function);
+        llvm::verifyFunction(*function->llfunction);
         function = nullptr;
         return Any();
     }
@@ -166,14 +182,17 @@ public:
     Any visitArithExpr(GrammarParser::ArithExprContext* context) override {
         shared_ptr<Expression> left = visit(context->expression(0));
         shared_ptr<Expression> right = visit(context->expression(1));
-        char op = context->op->getText()[0];
+        char op1 = context->op->getText()[0];
+        char op2 = 0;
+        if (context->op->getText().length() == 2)
+            op2 = context->op->getText()[1];
         if (left->type != right->type)
             error("Incompatible types");
-        auto type = left->type;
-        if (type != intType)
-            error("Unsupported type for " << op);
+        if (left->type != intType)
+            error("Unsupported type for " << op1);
         llvm::Value* value;
-        switch (op) {
+        shared_ptr<Type> type = left->type;
+        switch (op1) {
         case '+':
             value = builder.CreateAdd(left->value, right->value);
             break;
@@ -186,10 +205,61 @@ public:
         case '/':
             value = builder.CreateSDiv(left->value, right->value);
             break;
+        case '!': // !=
+            type = boolType;
+            value = builder.CreateICmpNE(left->value, right->value);
+            break;
+        case '=': // ==
+            type = boolType;
+            value = builder.CreateICmpEQ(left->value, right->value);
+            break;
+        case '<':
+            type = boolType;
+            if (op2) // <=
+                value = builder.CreateICmpSLE(left->value, right->value);
+            else
+                // <
+                value = builder.CreateICmpSLT(left->value, right->value);
+            break;
+        case '>':
+            type = boolType;
+            if (op2) // >=
+                value = builder.CreateICmpSGE(left->value, right->value);
+            else
+                // >
+                value = builder.CreateICmpSGT(left->value, right->value);
+            break;
         default:
             error("BUG Unknown operator");
         }
         return make_shared<Expression>(type, value);
+    }
+
+    Any visitLogicExpr(GrammarParser::LogicExprContext* context) override {
+        shared_ptr<Expression> left = visit(context->expression(0));
+        shared_ptr<Expression> right = visit(context->expression(1));
+        char op = context->op->getText()[0];
+        if (left->type != boolType || right->type != boolType)
+            error(op << " requires boolean operands");
+        llvm::Value* value;
+        switch (op) {
+        case 'a':
+            value = builder.CreateAnd(left->value, right->value);
+            break;
+        case 'o':
+            value = builder.CreateOr(left->value, right->value);
+            break;
+        }
+        return make_shared<Expression>(boolType, value);
+    }
+
+    Any visitNotExpr(GrammarParser::NotExprContext* context) override {
+        shared_ptr<Expression> expr = visit(context->expression());
+        if (expr->type != boolType)
+            error("Negation operand not boolean");
+        llvm::Value* value = builder.CreateICmpEQ(expr->value,
+                llvm::ConstantInt::getFalse(llvmContext));
+        return make_shared<Expression>(boolType, value);
     }
 
     Any visitDeclaration(GrammarParser::DeclarationContext* context) override {

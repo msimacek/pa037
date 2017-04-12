@@ -28,6 +28,9 @@ assignment:     name=ID '=' expression
 
 expression:     expression op=('*' | '/') expression # ArithExpr
           |     expression op=('+' | '-') expression # ArithExpr
+          |     expression op=('<' | '<=' | '>' | '>=' | '==' | '!=') expression # ArithExpr
+          |     expression op=('and' | 'or') expression # LogicExpr
+          |     'not ' expression                    # NotExpr
           |     '(' expression ')'                   # Expr
           |     literal                              # Expr
           |     call                                 # Expr
