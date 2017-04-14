@@ -8,7 +8,7 @@ function:       'def' fndecl statements
 extdecl:        'extern' fndecl END
        ;
 
-fndecl:         name=ID '(' arglist ')' ':' type=ID
+fndecl:         name=ID '(' arglist ')' (':' type=ID)?
       ;
 
 statements:     '{' (statement)* '}'
@@ -24,7 +24,7 @@ statement:      expression END
 conditional:    'if' condition=expression trueBranch=statements ('else' falseBranch=statements)?
            ;
 
-returnStmt:     'return' expression
+returnStmt:     'return' expression?
           ;
 
 declaration:    'var' name=ID (':' type=ID)? ('=' expression)?
