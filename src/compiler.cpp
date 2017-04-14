@@ -4,6 +4,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Verifier.h"
 
 #include "antlr4-runtime.h"
@@ -79,7 +80,7 @@ private:
     llvm::LLVMContext llvmContext;
     llvm::IRBuilder<> builder;
     llvm::Module* module;
-    llvm::Function* currentFunction;
+    shared_ptr<Function> currentFunction;
     SymbolTable symbolTable;
     map<std::string, shared_ptr<Function>> functions;
 
@@ -94,7 +95,7 @@ private:
 public:
 
     Visitor() :
-            builder(llvmContext), module(nullptr), currentFunction(nullptr) {
+            builder(llvmContext), module(nullptr) {
     }
 
 #define error(message_expr) do { \
@@ -133,12 +134,12 @@ public:
     }
 
     Any visitFunction(GrammarParser::FunctionContext* context) override {
-        shared_ptr<Function> function = visitFndecl(context->fndecl());
+        currentFunction = visitFndecl(context->fndecl());
         llvm::BasicBlock *block = llvm::BasicBlock::Create(llvmContext, "entry",
-                function->llfunction);
+                currentFunction->llfunction);
         builder.SetInsertPoint(block);
-        auto it = function->llfunction->args().begin();
-        for (auto arg : function->args) {
+        auto it = currentFunction->llfunction->args().begin();
+        for (auto arg : currentFunction->args) {
             auto& fnArg = *it;
             fnArg.setName(arg->name);
             auto alloc = builder.CreateAlloca(fnArg.getType(), nullptr,
@@ -147,12 +148,17 @@ public:
             symbolTable[arg->name] = make_shared<Expression>(arg->type, alloc);
             it++;
         }
-        shared_ptr<Expression> expr = visit(context->statements());
-        if (expr->type != function->type)
-            error("Return value doesn't match type");
+        visit(context->statements());
+        llvm::verifyFunction(*currentFunction->llfunction);
+        currentFunction = nullptr;
+        return Any();
+    }
+
+    Any visitReturnStmt(GrammarParser::ReturnStmtContext* context) override {
+        shared_ptr<Expression> expr = visit(context->expression());
+        if (expr->type != currentFunction->type)
+            error("Expression in return doesn't match function type");
         builder.CreateRet(expr->value);
-        llvm::verifyFunction(*function->llfunction);
-        function = nullptr;
         return Any();
     }
 
@@ -326,6 +332,28 @@ public:
             error("Undefined variable " << name);
         shared_ptr<Expression> rhs = visit(context->expression());
         builder.CreateStore(rhs->value, var->value);
+        return Any();
+    }
+
+    Any visitConditional(GrammarParser::ConditionalContext* context) override {
+        shared_ptr<Expression> condition = visit(context->condition);
+        if (condition->type != boolType)
+            error("Condition must be boolean");
+        llvm::Function* currentFunction = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* trueBranch = llvm::BasicBlock::Create(llvmContext, "then", currentFunction);
+        llvm::BasicBlock* falseBranch = llvm::BasicBlock::Create(llvmContext, "else");
+        llvm::BasicBlock* after = llvm::BasicBlock::Create(llvmContext, "after");
+        builder.CreateCondBr(condition->value, trueBranch, falseBranch);
+        builder.SetInsertPoint(trueBranch);
+        visit(context->trueBranch);
+        builder.CreateBr(after);
+        currentFunction->getBasicBlockList().push_back(falseBranch);
+        builder.SetInsertPoint(falseBranch);
+        if (context->falseBranch)
+            visit(context->falseBranch);
+        builder.CreateBr(after);
+        currentFunction->getBasicBlockList().push_back(after);
+        builder.SetInsertPoint(after);
         return Any();
     }
 

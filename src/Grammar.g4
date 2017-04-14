@@ -11,14 +11,21 @@ extdecl:        'extern' fndecl END
 fndecl:         name=ID '(' arglist ')' ':' type=ID
       ;
 
-statements:     '{' (statement END)* '}'
-          |     statement END
+statements:     '{' (statement)* '}'
           ;
 
-statement:      expression                     # ExprStatement
-         |      declaration                    # DeclStatement
-         |      assignment                     # AssignStatement
+statement:      expression END
+         |      declaration END
+         |      assignment END
+         |      returnStmt END
+         |      conditional
          ;
+
+conditional:    'if' condition=expression trueBranch=statements ('else' falseBranch=statements)?
+           ;
+
+returnStmt:     'return' expression
+          ;
 
 declaration:    'var' name=ID (':' type=ID)? ('=' expression)?
            ;
