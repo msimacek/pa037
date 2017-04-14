@@ -238,7 +238,12 @@ public:
     Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* ctx)
             override {
         int value = (ctx->value->getText() == "true") ? 1 : 0;
-        return (llvm::Value*)llvm::ConstantInt::get(llvmContext, llvm::APInt(1, value, true));
+        return (llvm::Value*) llvm::ConstantInt::get(llvmContext,
+                llvm::APInt(1, value, true));
+    }
+
+    Any visitParenExpr(GrammarParser::ParenExprContext* context) override {
+        return visit(context->expression());
     }
 
     Any visitArithExpr(GrammarParser::ArithExprContext* context) override {
@@ -333,6 +338,12 @@ public:
             error(context,
                     "Variable declaration needs to have a type or an initializer");
         }
+        if (context->arrayDim) {
+            int dim = stoi(context->arrayDim->getText());
+            llvm::Value* arrayDim = llvm::ConstantInt::get(intType, dim);
+            initializer = builder.CreateAlloca(type, arrayDim);
+            type = llvm::PointerType::getUnqual(type);
+        }
         auto alloc = builder.CreateAlloca(type, nullptr, name);
         if (initializer) {
             if (initializer->getType() != type)
@@ -348,7 +359,25 @@ public:
         auto var = symbolTable[name];
         if (var == nullptr)
             error(context, "Undefined variable " << name);
-        return (llvm::Value*)builder.CreateLoad(var);
+        return (llvm::Value*) builder.CreateLoad(var);
+    }
+
+    Any visitAddrExpr(GrammarParser::AddrExprContext* context) override {
+        const string& name = context->ID()->getText();
+        auto var = symbolTable[name];
+        if (var == nullptr)
+            error(context, "Undefined variable " << name);
+        return (llvm::Value*) var;
+    }
+
+    Any visitSubscriptExpr(GrammarParser::SubscriptExprContext* context) override {
+        llvm::Value* pointer = visit(context->expr);
+        llvm::Value* offset = visit(context->subscript);
+        if (!pointer->getType()->isPointerTy())
+            error(context, "Subscript access on non-pointer");
+        pointer = builder.CreateGEP(pointer, offset);
+        llvm::Value* value = builder.CreateLoad(pointer);
+        return value;
     }
 
     Any visitAssignment(GrammarParser::AssignmentContext* context) override {
@@ -464,9 +493,9 @@ private:
         if (it == types.end())
             error(context, "Type not found: " << typeName);
         llvm::Type* type = it->second;
-        if (!typeContext->ptrDims)
+        if (!typeContext->ptrDims())
             return type;
-        unsigned dims = typeContext->ptrDims->getText().length();
+        unsigned dims = typeContext->ptrDims()->getText().length();
         for (unsigned i = 0; i < dims; i++)
             type = llvm::PointerType::getUnqual(type);
         return type;

@@ -35,18 +35,19 @@ forLoop:        'for' var=ID 'from' from=expression 'to' to=expression statement
 returnStmt:     'return' expression?
           ;
 
-declaration:    'var' name=ID (':' type)? ('=' expression)?
+declaration:    'var' name=ID (':' type)? ('[' arrayDim=INTEGER ']')? ('=' expression)?
            ;
 
 assignment:     name=ID '=' expression
           ;
 
-expression:     expression op=('*' | '/') expression # ArithExpr
+expression:     expr=expression '[' subscript=expression ']'        # SubscriptExpr
+          |     expression op=('*' | '/') expression # ArithExpr
           |     expression op=('+' | '-') expression # ArithExpr
           |     expression op=('<' | '<=' | '>' | '>=' | '==' | '!=') expression # ArithExpr
           |     expression op=('and' | 'or') expression # LogicExpr
           |     'not ' expression                    # NotExpr
-          |     '(' expression ')'                   # Expr
+          |     '(' expression ')'                   # ParenExpr
           |     literal                              # Expr
           |     call                                 # Expr
           |     identifier                           # Expr
@@ -68,8 +69,10 @@ literal:        value=INTEGER             # IntegerLiteral
        |        value=('true' | 'false')  # BooleanLiteral
        ;
 
-type:           name=ID ptrDims='*'*
+type:           name=ID ptrDims
     ;
+
+ptrDims:         '*'*;
 
 identifier:     ID;
 
