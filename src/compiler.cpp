@@ -47,11 +47,27 @@ public:
 
 class SymbolTable {
 private:
-    std::map<std::string, std::shared_ptr<Expression>> table;
+    std::vector<std::map<std::string, std::shared_ptr<Expression>>>tables;
 public:
+    SymbolTable() {
+        tables.resize(1);
+    }
 
     std::shared_ptr<Expression>& operator[](const std::string& name) {
-        return table[name];
+        for (auto it = tables.rbegin(); it != tables.rend(); ++it) {
+            auto match = it->find(name);
+            if (match != it->end())
+            return match->second;
+        }
+        return tables.back()[name];
+    }
+
+    void enterScope() {
+        tables.resize(tables.size() + 1);
+    }
+
+    void exitScope() {
+        tables.resize(tables.size() - 1);
     }
 };
 
@@ -172,11 +188,13 @@ public:
         if (context->expression()) {
             shared_ptr<Expression> expr = visit(context->expression());
             if (expr->type != currentFunction->type)
-                error(context, "Expression in return doesn't match function type");
+                error(context,
+                        "Expression in return doesn't match function type");
             builder.CreateRet(expr->value);
         } else {
             if (currentFunction->type != voidType)
-                error(context, "Missing value for return in a non-void function");
+                error(context,
+                        "Missing value for return in a non-void function");
             builder.CreateRetVoid();
         }
         currentBlockTerminated = true;
@@ -207,11 +225,13 @@ public:
     }
 
     Any visitStatements(GrammarParser::StatementsContext* context) override {
+        symbolTable.enterScope();
         for (auto statement : context->statement()) {
             if (currentBlockTerminated)
                 error(statement, "Unreachable code");
             visit(statement);
         }
+        symbolTable.exitScope();
         return Any();
     }
 
@@ -360,21 +380,21 @@ public:
     Any visitConditional(GrammarParser::ConditionalContext* context) override {
         shared_ptr<Expression> condition = visit(context->condition);
         if (condition->type != boolType)
-            error(context, "Condition must be boolean");
-        llvm::Function* currentFunction = this->currentFunction->llfunction;
+            error(context, "Condition must be a boolean");
+        llvm::Function* llfunction = currentFunction->llfunction;
         llvm::BasicBlock* trueBranch = llvm::BasicBlock::Create(llvmContext,
-                "then", currentFunction);
+                "then", llfunction);
         llvm::BasicBlock* falseBranch = llvm::BasicBlock::Create(llvmContext,
                 "else");
         llvm::BasicBlock* after = llvm::BasicBlock::Create(llvmContext,
-                "after");
+                "endif");
         builder.CreateCondBr(condition->value, trueBranch, falseBranch);
         builder.SetInsertPoint(trueBranch);
         visit(context->trueBranch);
         bool trueBranchTerminated = currentBlockTerminated;
         if (!trueBranchTerminated)
             builder.CreateBr(after);
-        currentFunction->getBasicBlockList().push_back(falseBranch);
+        llfunction->getBasicBlockList().push_back(falseBranch);
         builder.SetInsertPoint(falseBranch);
         currentBlockTerminated = false;
         if (context->falseBranch)
@@ -384,9 +404,71 @@ public:
             builder.CreateBr(after);
         currentBlockTerminated = trueBranchTerminated && falseBranchTerminated;
         if (!currentBlockTerminated) {
-            currentFunction->getBasicBlockList().push_back(after);
+            llfunction->getBasicBlockList().push_back(after);
             builder.SetInsertPoint(after);
         }
+        return Any();
+    }
+
+    Any visitWhileLoop(GrammarParser::WhileLoopContext* context) override {
+        llvm::Function* llfunction = currentFunction->llfunction;
+        llvm::BasicBlock* loop = llvm::BasicBlock::Create(llvmContext, "while",
+                llfunction);
+        llvm::BasicBlock* inner = llvm::BasicBlock::Create(llvmContext, "do");
+        llvm::BasicBlock* after = llvm::BasicBlock::Create(llvmContext,
+                "endwhile");
+        builder.CreateBr(loop);
+        builder.SetInsertPoint(loop);
+        shared_ptr<Expression> condition = visit(context->condition);
+        if (condition->type != boolType)
+            error(context, "Condition must be a boolean");
+        builder.CreateCondBr(condition->value, inner, after);
+        llfunction->getBasicBlockList().push_back(inner);
+        builder.SetInsertPoint(inner);
+        visit(context->statements());
+        if (!currentBlockTerminated)
+            builder.CreateBr(loop);
+        llfunction->getBasicBlockList().push_back(after);
+        builder.SetInsertPoint(after);
+        currentBlockTerminated = false;
+        return Any();
+    }
+
+    Any visitForLoop(GrammarParser::ForLoopContext* context) override {
+        llvm::Function* llfunction = currentFunction->llfunction;
+        shared_ptr<Expression> from = visit(context->from);
+        shared_ptr<Expression> to = visit(context->to);
+        if (from->type != intType || to->type != intType)
+            error(context, "For loop bounds must be of integer type");
+        const string& varName = context->var->getText();
+        llvm::Value* iterVar = builder.CreateAlloca(intType->lltype, nullptr,
+                varName);
+        builder.CreateStore(from->value, iterVar);
+        llvm::BasicBlock* loop = llvm::BasicBlock::Create(llvmContext, "for",
+                llfunction);
+        llvm::BasicBlock* inner = llvm::BasicBlock::Create(llvmContext, "do");
+        llvm::BasicBlock* after = llvm::BasicBlock::Create(llvmContext,
+                "endfor");
+        builder.CreateBr(loop);
+        builder.SetInsertPoint(loop);
+        llvm::Value* varValue = builder.CreateLoad(iterVar, varName + "_var");
+        llvm::Value* condition = builder.CreateICmpSLT(varValue, to->value);
+        builder.CreateCondBr(condition, inner, after);
+        llfunction->getBasicBlockList().push_back(inner);
+        builder.SetInsertPoint(inner);
+        symbolTable.enterScope();
+        symbolTable[varName] = make_shared<Expression>(intType, iterVar);
+        visit(context->statements());
+        symbolTable.exitScope();
+        if (!currentBlockTerminated) {
+            llvm::Value* incVal = builder.CreateAdd(varValue,
+                    llvm::ConstantInt::get(intType->lltype, 1));
+            builder.CreateStore(incVal, iterVar);
+            builder.CreateBr(loop);
+        }
+        llfunction->getBasicBlockList().push_back(after);
+        builder.SetInsertPoint(after);
+        currentBlockTerminated = false;
         return Any();
     }
 

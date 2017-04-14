@@ -19,10 +19,18 @@ statement:      expression END
          |      assignment END
          |      returnStmt END
          |      conditional
+         |      whileLoop
+         |      forLoop
          ;
 
 conditional:    'if' condition=expression trueBranch=statements ('else' falseBranch=statements)?
            ;
+
+whileLoop:      'while' condition=expression statements
+         ;
+
+forLoop:        'for' var=ID 'from' from=expression 'to' to=expression statements
+       ;
 
 returnStmt:     'return' expression?
           ;
