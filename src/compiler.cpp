@@ -21,43 +21,19 @@ using namespace std;
 
 namespace pa037 {
 
-class Type {
-public:
-    llvm::Type* lltype;
-    Type(llvm::Type* lltype) :
-            lltype(lltype) {
-    }
-};
-
-enum ValueCategory {
-    RVALUE, LVALUE
-};
-
-class Expression {
-public:
-    shared_ptr<Type> type;
-    llvm::Value* value;
-    ValueCategory category;
-
-    Expression(shared_ptr<Type> type, llvm::Value* value = nullptr,
-            ValueCategory category = RVALUE) :
-            type(type), value(value), category(category) {
-    }
-};
-
 class SymbolTable {
 private:
-    std::vector<std::map<std::string, std::shared_ptr<Expression>>>tables;
+    std::vector<std::map<std::string, llvm::Value*>> tables;
 public:
     SymbolTable() {
         tables.resize(1);
     }
 
-    std::shared_ptr<Expression>& operator[](const std::string& name) {
+    llvm::Value*& operator[](const std::string& name) {
         for (auto it = tables.rbegin(); it != tables.rend(); ++it) {
             auto match = it->find(name);
             if (match != it->end())
-            return match->second;
+                return match->second;
         }
         return tables.back()[name];
     }
@@ -74,8 +50,8 @@ public:
 class Argument {
 public:
     string name;
-    shared_ptr<Type> type;
-    Argument(const string& name, shared_ptr<Type> type) :
+    llvm::Type* type;
+    Argument(const string& name, llvm::Type* type) :
             name(name), type(type) {
     }
 };
@@ -83,9 +59,9 @@ public:
 class Function {
 public:
     llvm::Function* llfunction;
-    shared_ptr<Type> type;
+    llvm::Type* type;
     vector<shared_ptr<Argument>> args;
-    Function(llvm::Function* llfunction, shared_ptr<Type> type,
+    Function(llvm::Function* llfunction, llvm::Type* type,
             vector<shared_ptr<Argument>> args) :
             llfunction(llfunction), type(type), args(args) {
     }
@@ -101,15 +77,14 @@ private:
     SymbolTable symbolTable;
     map<std::string, shared_ptr<Function>> functions;
 
-    shared_ptr<Type> intType = make_shared<Type>(
-            llvm::Type::getInt32Ty(llvmContext));
-    shared_ptr<Type> boolType = make_shared<Type>(
-            llvm::Type::getInt1Ty(llvmContext));
-    shared_ptr<Type> voidType = make_shared<Type>(
-            llvm::Type::getVoidTy(llvmContext));
+    llvm::Type* intType = llvm::Type::getInt32Ty(llvmContext);
+    llvm::Type* boolType = llvm::Type::getInt1Ty(llvmContext);
+    llvm::Type* charType = llvm::Type::getInt8Ty(llvmContext);
+    llvm::Type* voidType = llvm::Type::getVoidTy(llvmContext);
+    llvm::Type* stringType = llvm::PointerType::getUnqual(charType);
 
-    map<std::string, shared_ptr<Type>> types { { "int", intType }, { "bool",
-            boolType } };
+    map<std::string, llvm::Type*> types { { "int", intType },
+            { "bool", boolType }, { "char", charType } };
 
 public:
 
@@ -136,16 +111,16 @@ public:
         vector<shared_ptr<Argument>> args;
         vector<llvm::Type*> lltypes;
         for (auto arg : context->arglist()->arg()) {
-            auto argType = getType(context, arg->type->getText());
+            auto argType = getType(context, arg->type());
             args.push_back(
                     make_shared<Argument>(arg->name->getText(), argType));
-            lltypes.push_back(argType->lltype);
+            lltypes.push_back(argType);
         }
         auto type =
-                (context->type) ?
-                        getType(context, context->type->getText()) : voidType;
-        llvm::FunctionType *functionType = llvm::FunctionType::get(type->lltype,
-                lltypes, false);
+                (context->type()) ?
+                        getType(context, context->type()) : voidType;
+        llvm::FunctionType *functionType = llvm::FunctionType::get(type,
+                lltypes, context->variadic);
 
         llvm::Function *llfunction = llvm::Function::Create(functionType,
                 llvm::Function::ExternalLinkage, name, module);
@@ -168,7 +143,7 @@ public:
             auto alloc = builder.CreateAlloca(fnArg.getType(), nullptr,
                     arg->name + "_var");
             builder.CreateStore(&fnArg, alloc);
-            symbolTable[arg->name] = make_shared<Expression>(arg->type, alloc);
+            symbolTable[arg->name] = alloc;
             it++;
         }
         visit(context->statements());
@@ -186,11 +161,11 @@ public:
 
     Any visitReturnStmt(GrammarParser::ReturnStmtContext* context) override {
         if (context->expression()) {
-            shared_ptr<Expression> expr = visit(context->expression());
-            if (expr->type != currentFunction->type)
+            llvm::Value* value = visit(context->expression());
+            if (value->getType() != currentFunction->type)
                 error(context,
                         "Expression in return doesn't match function type");
-            builder.CreateRet(expr->value);
+            builder.CreateRet(value);
         } else {
             if (currentFunction->type != voidType)
                 error(context,
@@ -207,21 +182,24 @@ public:
         if (!function)
             error(context, "Function " << name << "not declared");
         vector<llvm::Value*> args;
-        vector<shared_ptr<Type>> expectedTypes;
+        vector<llvm::Type*> expectedTypes;
         for (auto arg : function->args) {
             expectedTypes.push_back(arg->type);
         }
-        vector<shared_ptr<Type>> actualTypes;
+        vector<llvm::Type*> actualTypes;
         for (auto expr : context->expression()) {
-            shared_ptr<Expression> arg = visit(expr);
-            args.push_back(arg->value);
-            actualTypes.push_back(arg->type);
+            llvm::Value* value = visit(expr);
+            args.push_back(value);
+            actualTypes.push_back(value->getType());
+        }
+        if (function->llfunction->isVarArg()) {
+            actualTypes.resize(expectedTypes.size());
         }
         if (actualTypes != expectedTypes) {
-            error(context, "Incorect function arguments");
+            error(context, "Incorrect function arguments");
         }
         llvm::Value* value = builder.CreateCall(function->llfunction, args);
-        return make_shared<Expression>(function->type, value);
+        return value;
     }
 
     Any visitStatements(GrammarParser::StatementsContext* context) override {
@@ -237,124 +215,131 @@ public:
 
     Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx)
             override {
-        long long value = std::stoi(ctx->value->getText());
-        return make_shared<Expression>(intType,
-                llvm::ConstantInt::get(llvmContext,
-                        llvm::APInt(32, value, true)));
+        auto value = std::stoi(ctx->value->getText());
+        return (llvm::Value*) llvm::ConstantInt::get(intType, value);
+    }
+
+    Any visitCharLiteral(GrammarParser::CharLiteralContext* context) override {
+        string value = processStringLiteral(context->CHAR()->getText());
+        return (llvm::Value*) llvm::ConstantInt::get(charType, value[0]);
+    }
+
+    Any visitStringLiteral(GrammarParser::StringLiteralContext* context)
+            override {
+        string value = processStringLiteral(context->STRING()->getText());
+        auto constant = llvm::ConstantDataArray::getString(llvmContext, value,
+                true);
+        auto global = new llvm::GlobalVariable(*module, constant->getType(),
+                true, llvm::GlobalValue::PrivateLinkage, constant);
+        auto pointer = builder.CreateBitCast(global, stringType);
+        return pointer;
     }
 
     Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* ctx)
             override {
         int value = (ctx->value->getText() == "true") ? 1 : 0;
-        return make_shared<Expression>(boolType,
-                llvm::ConstantInt::get(llvmContext,
-                        llvm::APInt(1, value, true)));
+        return (llvm::Value*)llvm::ConstantInt::get(llvmContext, llvm::APInt(1, value, true));
     }
 
     Any visitArithExpr(GrammarParser::ArithExprContext* context) override {
-        shared_ptr<Expression> left = visit(context->expression(0));
-        shared_ptr<Expression> right = visit(context->expression(1));
+        llvm::Value* left = visit(context->expression(0));
+        llvm::Value* right = visit(context->expression(1));
         char op1 = context->op->getText()[0];
         char op2 = 0;
         if (context->op->getText().length() == 2)
             op2 = context->op->getText()[1];
-        if (left->type != right->type)
+        if (left->getType() != right->getType())
             error(context, "Incompatible types");
-        if (left->type != intType)
+        if (left->getType() != intType)
             error(context, "Unsupported type for " << op1);
         llvm::Value* value;
-        shared_ptr<Type> type = left->type;
         switch (op1) {
         case '+':
-            value = builder.CreateAdd(left->value, right->value);
+            value = builder.CreateAdd(left, right);
             break;
         case '-':
-            value = builder.CreateSub(left->value, right->value);
+            value = builder.CreateSub(left, right);
             break;
         case '*':
-            value = builder.CreateMul(left->value, right->value);
+            value = builder.CreateMul(left, right);
             break;
         case '/':
-            value = builder.CreateSDiv(left->value, right->value);
+            value = builder.CreateSDiv(left, right);
             break;
         case '!': // !=
-            type = boolType;
-            value = builder.CreateICmpNE(left->value, right->value);
+            value = builder.CreateICmpNE(left, right);
             break;
         case '=': // ==
-            type = boolType;
-            value = builder.CreateICmpEQ(left->value, right->value);
+            value = builder.CreateICmpEQ(left, right);
             break;
         case '<':
-            type = boolType;
             if (op2) // <=
-                value = builder.CreateICmpSLE(left->value, right->value);
+                value = builder.CreateICmpSLE(left, right);
             else
                 // <
-                value = builder.CreateICmpSLT(left->value, right->value);
+                value = builder.CreateICmpSLT(left, right);
             break;
         case '>':
-            type = boolType;
             if (op2) // >=
-                value = builder.CreateICmpSGE(left->value, right->value);
+                value = builder.CreateICmpSGE(left, right);
             else
                 // >
-                value = builder.CreateICmpSGT(left->value, right->value);
+                value = builder.CreateICmpSGT(left, right);
             break;
         default:
             error(context, "BUG Unknown operator");
         }
-        return make_shared<Expression>(type, value);
+        return value;
     }
 
     Any visitLogicExpr(GrammarParser::LogicExprContext* context) override {
-        shared_ptr<Expression> left = visit(context->expression(0));
-        shared_ptr<Expression> right = visit(context->expression(1));
+        llvm::Value* left = visit(context->expression(0));
+        llvm::Value* right = visit(context->expression(1));
         char op = context->op->getText()[0];
-        if (left->type != boolType || right->type != boolType)
+        if (left->getType() != boolType || right->getType() != boolType)
             error(context, op << " requires boolean operands");
         llvm::Value* value;
         switch (op) {
         case 'a':
-            value = builder.CreateAnd(left->value, right->value);
+            value = builder.CreateAnd(left, right);
             break;
         case 'o':
-            value = builder.CreateOr(left->value, right->value);
+            value = builder.CreateOr(left, right);
             break;
         }
-        return make_shared<Expression>(boolType, value);
+        return value;
     }
 
     Any visitNotExpr(GrammarParser::NotExprContext* context) override {
-        shared_ptr<Expression> expr = visit(context->expression());
-        if (expr->type != boolType)
+        llvm::Value* expr = visit(context->expression());
+        if (expr->getType() != boolType)
             error(context, "Negation operand not boolean");
-        llvm::Value* value = builder.CreateICmpEQ(expr->value,
+        llvm::Value* value = builder.CreateICmpEQ(expr,
                 llvm::ConstantInt::getFalse(llvmContext));
-        return make_shared<Expression>(boolType, value);
+        return value;
     }
 
     Any visitDeclaration(GrammarParser::DeclarationContext* context) override {
         const string& name = context->name->getText();
-        shared_ptr<Expression> initializer = nullptr;
+        llvm::Value* initializer = nullptr;
         if (context->expression())
             initializer = visit(context->expression());
-        shared_ptr<Type> type;
-        if (context->type) {
-            type = getType(context, context->type->getText());
+        llvm::Type* type;
+        if (context->type()) {
+            type = getType(context, context->type());
         } else if (initializer) {
-            type = initializer->type;
+            type = initializer->getType();
         } else {
             error(context,
                     "Variable declaration needs to have a type or an initializer");
         }
-        auto alloc = builder.CreateAlloca(type->lltype, nullptr, name);
+        auto alloc = builder.CreateAlloca(type, nullptr, name);
         if (initializer) {
-            if (initializer->type != type)
+            if (initializer->getType() != type)
                 error(context, "Incompatible type in initialization");
-            builder.CreateStore(initializer->value, alloc);
+            builder.CreateStore(initializer, alloc);
         }
-        symbolTable[name] = make_shared<Expression>(type, alloc);
+        symbolTable[name] = alloc;
         return Any();
     }
 
@@ -363,8 +348,7 @@ public:
         auto var = symbolTable[name];
         if (var == nullptr)
             error(context, "Undefined variable " << name);
-        return make_shared<Expression>(var->type,
-                builder.CreateLoad(var->value), LVALUE);
+        return (llvm::Value*)builder.CreateLoad(var);
     }
 
     Any visitAssignment(GrammarParser::AssignmentContext* context) override {
@@ -372,14 +356,14 @@ public:
         auto var = symbolTable[name];
         if (var == nullptr)
             error(context, "Undefined variable " << name);
-        shared_ptr<Expression> rhs = visit(context->expression());
-        builder.CreateStore(rhs->value, var->value);
+        llvm::Value* rhs = visit(context->expression());
+        builder.CreateStore(rhs, var);
         return Any();
     }
 
     Any visitConditional(GrammarParser::ConditionalContext* context) override {
-        shared_ptr<Expression> condition = visit(context->condition);
-        if (condition->type != boolType)
+        llvm::Value* condition = visit(context->condition);
+        if (condition->getType() != boolType)
             error(context, "Condition must be a boolean");
         llvm::Function* llfunction = currentFunction->llfunction;
         llvm::BasicBlock* trueBranch = llvm::BasicBlock::Create(llvmContext,
@@ -388,7 +372,7 @@ public:
                 "else");
         llvm::BasicBlock* after = llvm::BasicBlock::Create(llvmContext,
                 "endif");
-        builder.CreateCondBr(condition->value, trueBranch, falseBranch);
+        builder.CreateCondBr(condition, trueBranch, falseBranch);
         builder.SetInsertPoint(trueBranch);
         visit(context->trueBranch);
         bool trueBranchTerminated = currentBlockTerminated;
@@ -419,10 +403,10 @@ public:
                 "endwhile");
         builder.CreateBr(loop);
         builder.SetInsertPoint(loop);
-        shared_ptr<Expression> condition = visit(context->condition);
-        if (condition->type != boolType)
+        llvm::Value* condition = visit(context->condition);
+        if (condition->getType() != boolType)
             error(context, "Condition must be a boolean");
-        builder.CreateCondBr(condition->value, inner, after);
+        builder.CreateCondBr(condition, inner, after);
         llfunction->getBasicBlockList().push_back(inner);
         builder.SetInsertPoint(inner);
         visit(context->statements());
@@ -436,14 +420,13 @@ public:
 
     Any visitForLoop(GrammarParser::ForLoopContext* context) override {
         llvm::Function* llfunction = currentFunction->llfunction;
-        shared_ptr<Expression> from = visit(context->from);
-        shared_ptr<Expression> to = visit(context->to);
-        if (from->type != intType || to->type != intType)
+        llvm::Value* from = visit(context->from);
+        llvm::Value* to = visit(context->to);
+        if (from->getType() != intType || to->getType() != intType)
             error(context, "For loop bounds must be of integer type");
         const string& varName = context->var->getText();
-        llvm::Value* iterVar = builder.CreateAlloca(intType->lltype, nullptr,
-                varName);
-        builder.CreateStore(from->value, iterVar);
+        llvm::Value* iterVar = builder.CreateAlloca(intType, nullptr, varName);
+        builder.CreateStore(from, iterVar);
         llvm::BasicBlock* loop = llvm::BasicBlock::Create(llvmContext, "for",
                 llfunction);
         llvm::BasicBlock* inner = llvm::BasicBlock::Create(llvmContext, "do");
@@ -452,17 +435,17 @@ public:
         builder.CreateBr(loop);
         builder.SetInsertPoint(loop);
         llvm::Value* varValue = builder.CreateLoad(iterVar, varName + "_var");
-        llvm::Value* condition = builder.CreateICmpSLT(varValue, to->value);
+        llvm::Value* condition = builder.CreateICmpSLT(varValue, to);
         builder.CreateCondBr(condition, inner, after);
         llfunction->getBasicBlockList().push_back(inner);
         builder.SetInsertPoint(inner);
         symbolTable.enterScope();
-        symbolTable[varName] = make_shared<Expression>(intType, iterVar);
+        symbolTable[varName] = iterVar;
         visit(context->statements());
         symbolTable.exitScope();
         if (!currentBlockTerminated) {
             llvm::Value* incVal = builder.CreateAdd(varValue,
-                    llvm::ConstantInt::get(intType->lltype, 1));
+                    llvm::ConstantInt::get(intType, 1));
             builder.CreateStore(incVal, iterVar);
             builder.CreateBr(loop);
         }
@@ -474,12 +457,41 @@ public:
 
 private:
 
-    shared_ptr<Type> getType(antlr4::ParserRuleContext* context,
-            const string& typeName) {
+    llvm::Type* getType(antlr4::ParserRuleContext* context,
+            GrammarParser::TypeContext* typeContext) {
+        const string& typeName = typeContext->name->getText();
         auto it = types.find(typeName);
         if (it == types.end())
             error(context, "Type not found: " << typeName);
-        return it->second;
+        llvm::Type* type = it->second;
+        if (!typeContext->ptrDims)
+            return type;
+        unsigned dims = typeContext->ptrDims->getText().length();
+        for (unsigned i = 0; i < dims; i++)
+            type = llvm::PointerType::getUnqual(type);
+        return type;
+    }
+
+    string processStringLiteral(const string& input) {
+        string literal = input.substr(1, input.length() - 2);
+        size_t i = 0;
+        while ((i = literal.find('\\', i)) != std::string::npos) {
+            string replacement;
+            switch (literal[i + 1]) {
+            case 'n':
+                replacement = "\n";
+                break;
+            case 't':
+                replacement = "\t";
+                break;
+            default:
+                i++;
+                continue;
+            }
+            literal.replace(i, 2, replacement);
+            i++;
+        }
+        return literal;
     }
 };
 }

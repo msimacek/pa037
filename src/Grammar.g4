@@ -8,7 +8,7 @@ function:       'def' fndecl statements
 extdecl:        'extern' fndecl END
        ;
 
-fndecl:         name=ID '(' arglist ')' (':' type=ID)?
+fndecl:         name=ID '(' arglist variadic='...'? ')' (':' type)?
       ;
 
 statements:     '{' (statement)* '}'
@@ -35,7 +35,7 @@ forLoop:        'for' var=ID 'from' from=expression 'to' to=expression statement
 returnStmt:     'return' expression?
           ;
 
-declaration:    'var' name=ID (':' type=ID)? ('=' expression)?
+declaration:    'var' name=ID (':' type)? ('=' expression)?
            ;
 
 assignment:     name=ID '=' expression
@@ -50,24 +50,32 @@ expression:     expression op=('*' | '/') expression # ArithExpr
           |     literal                              # Expr
           |     call                                 # Expr
           |     identifier                           # Expr
+          |     '&' ID                               # AddrExpr
           ;
 
 arglist:        (arg (',' arg)*)?
        ;
 
-arg:            name=ID ':' type=ID
+arg:            name=ID ':' type
    ;
 
 call:           name=ID '(' (expression ( ',' expression)*)? ')'
     ;
 
 literal:        value=INTEGER             # IntegerLiteral
+       |        value=CHAR                # CharLiteral
+       |        value=STRING              # StringLiteral
        |        value=('true' | 'false')  # BooleanLiteral
        ;
+
+type:           name=ID ptrDims='*'*
+    ;
 
 identifier:     ID;
 
 INTEGER:        [0-9]+;
+CHAR:           [']~[']['];
+STRING:         ["]~["]*["];
 ID:             [a-zA-Z_][a-zA-Z_0-9]*;
 COMMENT:        '//' ~[\r\n]* -> skip;
 
