@@ -29,19 +29,20 @@ conditional:    'if' condition=expression trueBranch=statements ('else' falseBra
 whileLoop:      'while' condition=expression statements
          ;
 
-forLoop:        'for' var=ID 'from' from=expression 'to' to=expression statements
+forLoop:        'for' var=ID 'from' from=expression op=('to' | 'downto') to=expression statements
        ;
 
 returnStmt:     'return' expression?
           ;
 
-declaration:    'var' name=ID (':' type)? ('[' arrayDim=INTEGER ']')? ('=' expression)?
+declaration:    'var' name=ID (':' type)? ('[' arrayDim=expression ']')? ('=' initializer=expression)?
            ;
 
-assignment:     name=ID '=' expression
+assignment:     lhs=expression '=' rhs=expression
           ;
 
 expression:     expr=expression '[' subscript=expression ']'        # SubscriptExpr
+          |     '&' expression                       # AddrExpr
           |     expression op=('*' | '/') expression # ArithExpr
           |     expression op=('+' | '-') expression # ArithExpr
           |     expression op=('<' | '<=' | '>' | '>=' | '==' | '!=') expression # ArithExpr
@@ -51,7 +52,6 @@ expression:     expr=expression '[' subscript=expression ']'        # SubscriptE
           |     literal                              # Expr
           |     call                                 # Expr
           |     identifier                           # Expr
-          |     '&' ID                               # AddrExpr
           ;
 
 arglist:        (arg (',' arg)*)?

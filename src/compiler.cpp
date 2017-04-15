@@ -19,17 +19,16 @@
 using antlrcpp::Any;
 using namespace std;
 
-namespace pa037 {
-
+template<class T>
 class SymbolTable {
 private:
-    std::vector<std::map<std::string, llvm::Value*>> tables;
+    std::vector<std::map<std::string, T>> tables;
 public:
     SymbolTable() {
         tables.resize(1);
     }
 
-    llvm::Value*& operator[](const std::string& name) {
+    T& operator[](const std::string& name) {
         for (auto it = tables.rbegin(); it != tables.rend(); ++it) {
             auto match = it->find(name);
             if (match != it->end())
@@ -67,37 +66,107 @@ public:
     }
 };
 
-class Visitor: public GrammarBaseVisitor {
-private:
-    llvm::LLVMContext llvmContext;
-    llvm::IRBuilder<> builder;
-    llvm::Module* module;
-    shared_ptr<Function> currentFunction;
-    bool currentBlockTerminated = false;
-    SymbolTable symbolTable;
-    map<std::string, shared_ptr<Function>> functions;
+llvm::LLVMContext llvmContext;
+llvm::IRBuilder<> builder(llvmContext);
+llvm::Module* module;
+shared_ptr<Function> currentFunction;
+bool currentBlockTerminated = false;
+SymbolTable<llvm::Value*> symbolTable;
+SymbolTable<shared_ptr<Function>> functionTable;
 
-    llvm::Type* intType = llvm::Type::getInt32Ty(llvmContext);
-    llvm::Type* boolType = llvm::Type::getInt1Ty(llvmContext);
-    llvm::Type* charType = llvm::Type::getInt8Ty(llvmContext);
-    llvm::Type* voidType = llvm::Type::getVoidTy(llvmContext);
-    llvm::Type* stringType = llvm::PointerType::getUnqual(charType);
+llvm::Type* intType = llvm::Type::getInt32Ty(llvmContext);
+llvm::Type* boolType = llvm::Type::getInt1Ty(llvmContext);
+llvm::Type* charType = llvm::Type::getInt8Ty(llvmContext);
+llvm::Type* voidType = llvm::Type::getVoidTy(llvmContext);
+llvm::Type* stringType = llvm::PointerType::getUnqual(charType);
 
-    map<std::string, llvm::Type*> types { { "int", intType },
-            { "bool", boolType }, { "char", charType } };
-
-public:
-
-    Visitor() :
-            builder(llvmContext), module(nullptr) {
-    }
+map<std::string, llvm::Type*> types { { "int", intType }, { "bool", boolType },
+        { "char", charType } };
 
 #define error(context, message_expr) do { \
-    cerr << "line " << context->start->getLine() << ": " << message_expr << endl; \
+    cerr << "line " << (context)->start->getLine() << ": " << message_expr << endl; \
     exit(2); \
     throw 0; \
 } while(0)
 
+llvm::Type* getType(GrammarParser::TypeContext* context) {
+    const string& typeName = context->name->getText();
+    auto it = types.find(typeName);
+    if (it == types.end())
+        error(context, "Type not found: " << typeName);
+    llvm::Type* type = it->second;
+    if (!context->ptrDims())
+        return type;
+    unsigned dims = context->ptrDims()->getText().length();
+    for (unsigned i = 0; i < dims; i++)
+        type = llvm::PointerType::getUnqual(type);
+    return type;
+}
+
+string processStringLiteral(const string& input) {
+    string literal = input.substr(1, input.length() - 2);
+    size_t i = 0;
+    while ((i = literal.find('\\', i)) != std::string::npos) {
+        string replacement;
+        switch (literal[i + 1]) {
+        case 'n':
+            replacement = "\n";
+            break;
+        case 't':
+            replacement = "\t";
+            break;
+        default:
+            i++;
+            continue;
+        }
+        literal.replace(i, 2, replacement);
+        i++;
+    }
+    return literal;
+}
+
+class LValueVisitor: public GrammarBaseVisitor {
+private:
+    GrammarVisitor* rvalueVisitor;
+public:
+    LValueVisitor(GrammarVisitor* rvalueVisitor) :
+            rvalueVisitor(rvalueVisitor) {
+    }
+
+    Any visitIdentifier(GrammarParser::IdentifierContext* context) override {
+        const string& name = context->ID()->getText();
+        auto var = symbolTable[name];
+        if (var == nullptr)
+            error(context, "Undefined variable " << name);
+        return (llvm::Value*) var;
+    }
+
+    Any visitSubscriptExpr(GrammarParser::SubscriptExprContext* context)
+            override {
+        llvm::Value* pointer = rvalueVisitor->visit(context->expr);
+        llvm::Value* offset = rvalueVisitor->visit(context->subscript);
+        if (!pointer->getType()->isPointerTy())
+            error(context, "Subscript access on non-pointer");
+        pointer = builder.CreateGEP(pointer, offset);
+        return pointer;
+    }
+
+    Any visit(antlr4::tree::ParseTree* context) override {
+        Any ret = GrammarBaseVisitor::visit(context);
+        if (ret.isNull())
+            error((antlr4::ParserRuleContext* )context,
+                    "Address operand not an rvalue");
+        return ret;
+    }
+};
+
+class Visitor: public GrammarBaseVisitor {
+private:
+    LValueVisitor lvalueVisitor;
+public:
+    Visitor() :
+            lvalueVisitor(this) {
+    }
     Any visitProgramFile(GrammarParser::ProgramFileContext* context) override {
         llvm::Module mod("main", llvmContext);
         module = &mod;
@@ -111,14 +180,12 @@ public:
         vector<shared_ptr<Argument>> args;
         vector<llvm::Type*> lltypes;
         for (auto arg : context->arglist()->arg()) {
-            auto argType = getType(context, arg->type());
+            auto argType = getType(arg->type());
             args.push_back(
                     make_shared<Argument>(arg->name->getText(), argType));
             lltypes.push_back(argType);
         }
-        auto type =
-                (context->type()) ?
-                        getType(context, context->type()) : voidType;
+        auto type = (context->type()) ? getType(context->type()) : voidType;
         llvm::FunctionType *functionType = llvm::FunctionType::get(type,
                 lltypes, context->variadic);
 
@@ -126,7 +193,7 @@ public:
                 llvm::Function::ExternalLinkage, name, module);
         shared_ptr<Function> function = make_shared<Function>(llfunction, type,
                 args);
-        functions[name] = function;
+        functionTable[name] = function;
         return function;
     }
 
@@ -178,7 +245,7 @@ public:
 
     Any visitCall(GrammarParser::CallContext* context) override {
         const string& name = context->name->getText();
-        shared_ptr<Function> function = functions[name];
+        shared_ptr<Function> function = functionTable[name];
         if (!function)
             error(context, "Function " << name << "not declared");
         vector<llvm::Value*> args;
@@ -327,11 +394,11 @@ public:
     Any visitDeclaration(GrammarParser::DeclarationContext* context) override {
         const string& name = context->name->getText();
         llvm::Value* initializer = nullptr;
-        if (context->expression())
-            initializer = visit(context->expression());
+        if (context->initializer)
+            initializer = visit(context->initializer);
         llvm::Type* type;
         if (context->type()) {
-            type = getType(context, context->type());
+            type = getType(context->type());
         } else if (initializer) {
             type = initializer->getType();
         } else {
@@ -339,8 +406,7 @@ public:
                     "Variable declaration needs to have a type or an initializer");
         }
         if (context->arrayDim) {
-            int dim = stoi(context->arrayDim->getText());
-            llvm::Value* arrayDim = llvm::ConstantInt::get(intType, dim);
+            llvm::Value* arrayDim = visit(context->arrayDim);
             initializer = builder.CreateAlloca(type, arrayDim);
             type = llvm::PointerType::getUnqual(type);
         }
@@ -363,14 +429,12 @@ public:
     }
 
     Any visitAddrExpr(GrammarParser::AddrExprContext* context) override {
-        const string& name = context->ID()->getText();
-        auto var = symbolTable[name];
-        if (var == nullptr)
-            error(context, "Undefined variable " << name);
-        return (llvm::Value*) var;
+        llvm::Value* value = lvalueVisitor.visit(context->expression());
+        return value;
     }
 
-    Any visitSubscriptExpr(GrammarParser::SubscriptExprContext* context) override {
+    Any visitSubscriptExpr(GrammarParser::SubscriptExprContext* context)
+            override {
         llvm::Value* pointer = visit(context->expr);
         llvm::Value* offset = visit(context->subscript);
         if (!pointer->getType()->isPointerTy())
@@ -381,12 +445,9 @@ public:
     }
 
     Any visitAssignment(GrammarParser::AssignmentContext* context) override {
-        const string& name = context->name->getText();
-        auto var = symbolTable[name];
-        if (var == nullptr)
-            error(context, "Undefined variable " << name);
-        llvm::Value* rhs = visit(context->expression());
-        builder.CreateStore(rhs, var);
+        llvm::Value* rhs = visit(context->rhs);
+        llvm::Value* addr = lvalueVisitor.visit(context->lhs);
+        builder.CreateStore(rhs, addr);
         return Any();
     }
 
@@ -464,7 +525,12 @@ public:
         builder.CreateBr(loop);
         builder.SetInsertPoint(loop);
         llvm::Value* varValue = builder.CreateLoad(iterVar, varName + "_var");
-        llvm::Value* condition = builder.CreateICmpSLT(varValue, to);
+        llvm::Value* condition;
+        bool increasing = context->op->getText() == "to";
+        if (increasing)
+            condition = builder.CreateICmpSLT(varValue, to);
+        else
+            condition = builder.CreateICmpSGT(varValue, to);
         builder.CreateCondBr(condition, inner, after);
         llfunction->getBasicBlockList().push_back(inner);
         builder.SetInsertPoint(inner);
@@ -474,7 +540,7 @@ public:
         symbolTable.exitScope();
         if (!currentBlockTerminated) {
             llvm::Value* incVal = builder.CreateAdd(varValue,
-                    llvm::ConstantInt::get(intType, 1));
+                    llvm::ConstantInt::get(intType, (increasing) ? 1 : -1));
             builder.CreateStore(incVal, iterVar);
             builder.CreateBr(loop);
         }
@@ -483,47 +549,7 @@ public:
         currentBlockTerminated = false;
         return Any();
     }
-
-private:
-
-    llvm::Type* getType(antlr4::ParserRuleContext* context,
-            GrammarParser::TypeContext* typeContext) {
-        const string& typeName = typeContext->name->getText();
-        auto it = types.find(typeName);
-        if (it == types.end())
-            error(context, "Type not found: " << typeName);
-        llvm::Type* type = it->second;
-        if (!typeContext->ptrDims())
-            return type;
-        unsigned dims = typeContext->ptrDims()->getText().length();
-        for (unsigned i = 0; i < dims; i++)
-            type = llvm::PointerType::getUnqual(type);
-        return type;
-    }
-
-    string processStringLiteral(const string& input) {
-        string literal = input.substr(1, input.length() - 2);
-        size_t i = 0;
-        while ((i = literal.find('\\', i)) != std::string::npos) {
-            string replacement;
-            switch (literal[i + 1]) {
-            case 'n':
-                replacement = "\n";
-                break;
-            case 't':
-                replacement = "\t";
-                break;
-            default:
-                i++;
-                continue;
-            }
-            literal.replace(i, 2, replacement);
-            i++;
-        }
-        return literal;
-    }
 };
-}
 
 int main(int argc, const char* argv[]) {
     std::ifstream stream;
@@ -538,7 +564,7 @@ int main(int argc, const char* argv[]) {
     if (parser.getNumberOfSyntaxErrors())
         return 1;
 
-    pa037::Visitor visitor;
+    Visitor visitor;
     visitor.visitProgramFile(tree);
 
     return 0;
