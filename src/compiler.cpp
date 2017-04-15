@@ -1,11 +1,11 @@
-#include "llvm/Support/raw_ostream.h"
-
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 
 #include "antlr4-runtime.h"
 #include "GrammarLexer.h"
@@ -18,6 +18,13 @@
 
 using antlrcpp::Any;
 using namespace std;
+
+llvm::cl::opt<string> outputFilename("o",
+        llvm::cl::desc("Specify output filename"),
+        llvm::cl::value_desc("filename"), llvm::cl::init("a.out"));
+llvm::cl::opt<string> inputFilename(llvm::cl::Positional,
+        llvm::cl::desc("<input file>"), llvm::cl::Required);
+llvm::cl::opt<bool> outputAssembly("S", llvm::cl::desc("Output LLVM assembly"));
 
 template<class T>
 class SymbolTable {
@@ -171,7 +178,24 @@ public:
         llvm::Module mod("main", llvmContext);
         module = &mod;
         GrammarBaseVisitor::visitProgramFile(context);
-        module->print(llvm::outs(), nullptr);
+        if (llvm::verifyModule(*module, &llvm::errs()))
+            error(context, "LLVM module verification error");
+        if (outputAssembly) {
+            module->print(llvm::outs(), nullptr);
+        } else {
+            string outf = outputFilename + ".tmp";
+            error_code err;
+            {
+                llvm::raw_fd_ostream out(outf, err, llvm::sys::fs::F_None);
+                if (err)
+                    error(context, "Failed to open output file: " << err);
+                module->print(out, nullptr);
+            }
+            string cmd = "sh -c 'llc " + outf + " -o - | gcc -x assembler - -o "
+                    + outputFilename + "'";
+            system(cmd.c_str());
+        }
+        module = nullptr;
         return Any();
     }
 
@@ -221,7 +245,7 @@ public:
                 error(context, "Missing return");
         }
         if (llvm::verifyFunction(*currentFunction->llfunction, &llvm::errs()))
-            error(context, "LLVM verification error");
+            error(context, "LLVM function verification error");
         currentFunction = nullptr;
         return Any();
     }
@@ -552,8 +576,10 @@ public:
 };
 
 int main(int argc, const char* argv[]) {
+    llvm::cl::ParseCommandLineOptions(argc, argv);
+
     std::ifstream stream;
-    stream.open(argv[1]);
+    stream.open(inputFilename);
     antlr4::ANTLRInputStream input(stream);
     GrammarLexer lexer(&input);
     antlr4::CommonTokenStream tokens(&lexer);
