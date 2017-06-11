@@ -82,33 +82,20 @@ SymbolTable<llvm::Value*> symbolTable;
 SymbolTable<shared_ptr<Function>> functionTable;
 
 llvm::Type* intType = llvm::Type::getInt32Ty(llvmContext);
+llvm::Type* floatType = llvm::Type::getDoubleTy(llvmContext);
 llvm::Type* boolType = llvm::Type::getInt1Ty(llvmContext);
 llvm::Type* charType = llvm::Type::getInt8Ty(llvmContext);
 llvm::Type* voidType = llvm::Type::getVoidTy(llvmContext);
 llvm::Type* stringType = llvm::PointerType::getUnqual(charType);
 
 map<std::string, llvm::Type*> types { { "int", intType }, { "bool", boolType },
-        { "char", charType } };
+        { "char", charType }, { "float", floatType } };
 
 #define error(context, message_expr) do { \
     cerr << "line " << (context)->start->getLine() << ": " << message_expr << endl; \
     exit(2); \
     throw 0; \
 } while(0)
-
-llvm::Type* getType(GrammarParser::TypeContext* context) {
-    const string& typeName = context->name->getText();
-    auto it = types.find(typeName);
-    if (it == types.end())
-        error(context, "Type not found: " << typeName);
-    llvm::Type* type = it->second;
-    if (!context->ptrDims())
-        return type;
-    unsigned dims = context->ptrDims()->getText().length();
-    for (unsigned i = 0; i < dims; i++)
-        type = llvm::PointerType::getUnqual(type);
-    return type;
-}
 
 string processStringLiteral(const string& input) {
     string literal = input.substr(1, input.length() - 2);
@@ -174,9 +161,9 @@ public:
     Visitor() :
             lvalueVisitor(this) {
     }
+
     Any visitProgramFile(GrammarParser::ProgramFileContext* context) override {
-        llvm::Module mod("main", llvmContext);
-        module = &mod;
+        module = new llvm::Module("main", llvmContext); // context gets ownership
         GrammarBaseVisitor::visitProgramFile(context);
         if (llvm::verifyModule(*module, &llvm::errs()))
             error(context, "LLVM module verification error");
@@ -195,8 +182,21 @@ public:
                     + outputFilename + "'";
             system(cmd.c_str());
         }
-        module = nullptr;
         return Any();
+    }
+
+    Any visitType(GrammarParser::TypeContext* context) override {
+        const string& typeName = context->name->getText();
+        auto it = types.find(typeName);
+        if (it == types.end())
+            error(context, "Type not found: " << typeName);
+        llvm::Type* type = it->second;
+        if (!context->ptrDims())
+            return type;
+        unsigned dims = context->ptrDims()->getText().length();
+        for (unsigned i = 0; i < dims; i++)
+            type = llvm::PointerType::getUnqual(type);
+        return type;
     }
 
     Any visitFndecl(GrammarParser::FndeclContext* context) override {
@@ -204,12 +204,14 @@ public:
         vector<shared_ptr<Argument>> args;
         vector<llvm::Type*> lltypes;
         for (auto arg : context->arglist()->arg()) {
-            auto argType = getType(arg->type());
+            llvm::Type* argType = visit(arg->type());
             args.push_back(
                     make_shared<Argument>(arg->name->getText(), argType));
             lltypes.push_back(argType);
         }
-        auto type = (context->type()) ? getType(context->type()) : voidType;
+        llvm::Type* type =
+                (context->type()) ?
+                        (llvm::Type*) visit(context->type()) : voidType;
         llvm::FunctionType *functionType = llvm::FunctionType::get(type,
                 lltypes, context->variadic);
 
@@ -304,10 +306,16 @@ public:
         return Any();
     }
 
-    Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* ctx)
+    Any visitIntegerLiteral(GrammarParser::IntegerLiteralContext* context)
             override {
-        auto value = std::stoi(ctx->value->getText());
+        auto value = std::stoi(context->value->getText());
         return (llvm::Value*) llvm::ConstantInt::get(intType, value);
+    }
+
+    Any visitFloatLiteral(GrammarParser::FloatLiteralContext* context)
+            override {
+        double value = std::stod(context->value->getText());
+        return (llvm::Value*) llvm::ConstantFP::get(floatType, value);
     }
 
     Any visitCharLiteral(GrammarParser::CharLiteralContext* context) override {
@@ -326,11 +334,25 @@ public:
         return pointer;
     }
 
-    Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* ctx)
+    Any visitBooleanLiteral(GrammarParser::BooleanLiteralContext* context)
             override {
-        int value = (ctx->value->getText() == "true") ? 1 : 0;
+        int value = (context->value->getText() == "true") ? 1 : 0;
         return (llvm::Value*) llvm::ConstantInt::get(llvmContext,
                 llvm::APInt(1, value, true));
+    }
+
+    Any visitCastExpr(GrammarParser::CastExprContext* context) override {
+        llvm::Value* value = visit(context->expr);
+        llvm::Type* sourceType = value->getType();
+        llvm::Type* targetType = visit(context->type());
+        if (targetType == floatType) {
+            if (sourceType == intType)
+                return builder.CreateSIToFP(value, targetType);
+        } else if (targetType == intType) {
+            if (sourceType == floatType)
+                return builder.CreateFPToSI(value, targetType);
+        }
+        error(context, "Cast not allowed for given types");
     }
 
     Any visitParenExpr(GrammarParser::ParenExprContext* context) override {
@@ -346,41 +368,47 @@ public:
             op2 = context->op->getText()[1];
         if (left->getType() != right->getType())
             error(context, "Incompatible types");
-        if (left->getType() != intType)
+        llvm::Type* type = left->getType();
+        if (type != intType && type != floatType)
             error(context, "Unsupported type for " << op1);
         llvm::Value* value;
+#define _insnp(name, iprefix) (type != floatType) ? builder.Create##iprefix##name(left, right) : builder.CreateF##name(left, right)
+#define _insn(name) _insnp(name, )
+#define _insncmpp(cmp, iprefix) (type != floatType) ? builder.CreateICmp##iprefix##cmp(left, right) : builder.CreateFCmpO##cmp(left, right)
+#define _insncmp(cmp) _insncmpp(cmp, )
+#define _insncmps(cmp) _insncmpp(cmp, S)
         switch (op1) {
         case '+':
-            value = builder.CreateAdd(left, right);
+            value = _insn(Add);
             break;
         case '-':
-            value = builder.CreateSub(left, right);
+            value = _insn(Sub);
             break;
         case '*':
-            value = builder.CreateMul(left, right);
+            value = _insn(Mul);
             break;
         case '/':
-            value = builder.CreateSDiv(left, right);
+            value = _insnp(Div, S);
             break;
         case '!': // !=
-            value = builder.CreateICmpNE(left, right);
+            value = _insncmp(NE);
             break;
         case '=': // ==
-            value = builder.CreateICmpEQ(left, right);
+            value = _insncmp(EQ);
             break;
         case '<':
             if (op2) // <=
-                value = builder.CreateICmpSLE(left, right);
+                value = _insncmps(LE);
             else
                 // <
-                value = builder.CreateICmpSLT(left, right);
+                value = _insncmps(LT);
             break;
         case '>':
             if (op2) // >=
-                value = builder.CreateICmpSGE(left, right);
+                value = _insncmps(GE);
             else
                 // >
-                value = builder.CreateICmpSGT(left, right);
+                value = _insncmps(GT);
             break;
         default:
             error(context, "BUG Unknown operator");
@@ -422,7 +450,7 @@ public:
             initializer = visit(context->initializer);
         llvm::Type* type;
         if (context->type()) {
-            type = getType(context->type());
+            type = visit(context->type());
         } else if (initializer) {
             type = initializer->getType();
         } else {

@@ -42,6 +42,7 @@ assignment:     lhs=expression '=' rhs=expression
           ;
 
 expression:     expr=expression '[' subscript=expression ']'        # SubscriptExpr
+          |     expr=expression '::' type            # CastExpr
           |     '&' expression                       # AddrExpr
           |     expression op=('*' | '/') expression # ArithExpr
           |     expression op=('+' | '-') expression # ArithExpr
@@ -64,6 +65,7 @@ call:           name=ID '(' (expression ( ',' expression)*)? ')'
     ;
 
 literal:        value=INTEGER             # IntegerLiteral
+       |        value=FLOAT               # FloatLiteral
        |        value=CHAR                # CharLiteral
        |        value=STRING              # StringLiteral
        |        value=('true' | 'false')  # BooleanLiteral
@@ -76,6 +78,7 @@ ptrDims:         '*'*;
 
 identifier:     ID;
 
+FLOAT:          [0-9]*[.][0-9]+;
 INTEGER:        [0-9]+;
 CHAR:           [']~[']['];
 STRING:         ["]~["]*["];
