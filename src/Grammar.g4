@@ -16,7 +16,7 @@ programFile:    (NL | function | extdecl | importStmt)+;
 function:       'def' fndecl (NL+ | 'do' NL*) statements 'end'
         ;
 
-extdecl:        'extern' fndecl stmtend
+extdecl:        'declare' fndecl stmtend
        ;
 
 importStmt:     'import' name=ID stmtend
