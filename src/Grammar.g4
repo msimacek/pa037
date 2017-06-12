@@ -5,11 +5,11 @@ grammar Grammar;
 }
 
 IGNORE_NEWLINE: '\n' {nesting > 0}? -> skip;
-NL:             '\n'+;
+NL:             '\n';
 
-stmtend:        NL | ';' NL?;
+stmtend:        NL+ | ';' NL*;
 
-programFile:    NL* (function | extdecl)+;
+programFile:    (NL | function | extdecl)+;
 
 function:       'def' fndecl (NL+ | 'do' NL*) statements 'end'
         ;
@@ -32,7 +32,7 @@ statement:      expression
          |      forLoop
          ;
 
-conditional:    'if' condition=expression (NL+ | 'then' NL*) trueBranch=statements ('else' falseBranch=statements)? 'end'
+conditional:    'if' condition=expression (NL+ | 'then' NL*) trueBranch=statements ('else' NL* falseBranch=statements)? 'end'
            ;
 
 whileLoop:      'while' condition=expression (NL+ | 'do' NL*) statements 'end'

@@ -273,7 +273,7 @@ public:
         const string& name = context->name->getText();
         shared_ptr<Function> function = functionTable[name];
         if (!function)
-            error(context, "Function " << name << "not declared");
+            error(context, "Function " << name << " not declared");
         vector<llvm::Value*> args;
         vector<llvm::Type*> expectedTypes;
         for (auto arg : function->args) {
