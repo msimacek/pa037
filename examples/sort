@@ -1,0 +1,48 @@
+import std
+
+def partition(input:int*, first:int, last:int):int
+    var pivot = input[first]
+    var left = first + 1
+    var right = last
+    var done = false
+    while not done
+        while left <= right and input[left] <= pivot
+            left = left + 1
+        end
+        while input[right] >= pivot and right >= left
+            right = right - 1
+        end
+        if right < left
+            done = true
+        else
+            var tmp = input[left]
+            input[left] = input[right]
+            input[right] = tmp
+        end
+    end
+    var tmp = input[first]
+    input[first] = input[right]
+    input[right] = tmp
+    return right
+end
+
+def quicksort(input:int*, first:int, last:int)
+    if first < last
+        var pivot = partition(input, first, last)
+        quicksort(input, first, pivot - 1)
+        quicksort(input, pivot + 1, last)
+    end
+end
+
+def main(argc:int, argv:char**):int
+    var numbers:int[argc - 1]
+    for i from 1 to argc
+        sscanf(argv[i], "%d", &numbers[i - 1])
+    end
+    quicksort(numbers, 0, argc - 2)
+    for i from 0 to argc - 1
+        printf("%d ", numbers[i])
+    end
+    printf("\n")
+    return 0
+end

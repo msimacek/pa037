@@ -1,0 +1,18 @@
+import std
+import math
+
+def main(argc:int, argv:char**):int
+    if argc < 2
+        printf("Too few arguments\n")
+        return 1
+    end
+    var outs:int[argc - 1]
+    for i from 1 to argc
+        sscanf(argv[i], "%d", &outs[i - 1])
+    end
+    for i from 0 to argc - 1
+        var x = outs[i]::float
+        printf("%g %g\n", x * 1.1, sqrt(x))
+    end
+    return 0
+end
