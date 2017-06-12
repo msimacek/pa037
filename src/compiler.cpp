@@ -179,9 +179,27 @@ public:
                 module->print(out, nullptr);
             }
             string cmd = "sh -c 'llc " + outf + " -o - | gcc -x assembler - -o "
-                    + outputFilename + "'";
+                    + outputFilename + " -lm'";
             system(cmd.c_str());
         }
+        return Any();
+    }
+
+    Any visitImportStmt(GrammarParser::ImportStmtContext* context) override {
+        std::ifstream stream;
+        stream.open((context->name->getText() + ".mod").c_str());
+        antlr4::ANTLRInputStream input(stream);
+        GrammarLexer lexer(&input);
+        antlr4::CommonTokenStream tokens(&lexer);
+        GrammarParser parser(&tokens);
+
+        GrammarParser::ModuleFileContext* tree = parser.moduleFile();
+
+        if (parser.getNumberOfSyntaxErrors())
+            error(context, "Module import failed");
+
+        Visitor visitor;
+        visitor.visitModuleFile(tree);
         return Any();
     }
 

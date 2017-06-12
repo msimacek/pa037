@@ -9,13 +9,18 @@ NL:             '\n';
 
 stmtend:        NL+ | ';' NL*;
 
-programFile:    (NL | function | extdecl)+;
+moduleFile:     (NL | extdecl | importStmt)+;
+
+programFile:    (NL | function | extdecl | importStmt)+;
 
 function:       'def' fndecl (NL+ | 'do' NL*) statements 'end'
         ;
 
 extdecl:        'extern' fndecl stmtend
        ;
+
+importStmt:     'import' name=ID stmtend
+          ;
 
 fndecl:         name=ID '(' arglist variadic='...'? ')' (':' type)?
       ;
