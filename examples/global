@@ -1,0 +1,19 @@
+import std
+
+var a:int[2]
+
+def foo()
+    printf(
+        "%d %d\n",
+        a[0],
+        a[1]
+    )
+end
+
+def main():int
+    foo()
+    a[0] = 2
+    a[1] = 5
+    foo()
+    return 0
+end
