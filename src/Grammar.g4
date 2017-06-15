@@ -5,6 +5,7 @@ grammar Grammar;
 }
 
 IGNORE_NEWLINE: '\n' {nesting > 0}? -> skip;
+NEWLINE_ESCAPE: '\\\n' -> skip;
 NL:             '\n';
 
 stmtend:        NL+ | ';' NL*;
