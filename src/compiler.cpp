@@ -477,16 +477,46 @@ public:
         }
         if (context->arrayDim) {
             llvm::Value* arrayDim = visit(context->arrayDim);
-            initializer = builder.CreateAlloca(type, arrayDim);
-            type = llvm::PointerType::getUnqual(type);
+            auto pointerType = llvm::PointerType::getUnqual(type);
+            if (!currentFunction) {
+                auto dims = dynamic_cast<llvm::ConstantInt*>(arrayDim);
+                if (!dims)
+                    error(context, "Global array dimensions must be integer");
+                auto arrayType = llvm::ArrayType::get(type,
+                        dims->getZExtValue());
+                initializer = new llvm::GlobalVariable(*module, arrayType,
+                        false, llvm::GlobalValue::LinkageTypes::ExternalLinkage,
+                        llvm::ConstantAggregateZero::get(arrayType), name);
+                initializer = builder.CreateBitCast(initializer, pointerType);
+            } else {
+                initializer = builder.CreateAlloca(type, arrayDim);
+            }
+            type = pointerType;
         }
-        auto alloc = builder.CreateAlloca(type, nullptr, name);
-        if (initializer) {
-            if (initializer->getType() != type)
-                error(context, "Incompatible type in initialization");
-            builder.CreateStore(initializer, alloc);
+        if (initializer && initializer->getType() != type)
+            error(context, "Incompatible type in initialization");
+        if (!currentFunction) {
+            auto var = new llvm::GlobalVariable(*module, type, false,
+                    llvm::GlobalValue::LinkageTypes::ExternalLinkage, nullptr,
+                    name);
+            llvm::Constant* constInitializer;
+            if (!initializer)
+                constInitializer = llvm::ConstantAggregateZero::get(type);
+            else {
+                constInitializer = dynamic_cast<llvm::Constant*>(initializer);
+                if (!constInitializer)
+                    error(context,
+                            "Global variable initializer must be constant");
+            }
+            var->setInitializer(constInitializer);
+            symbolTable[name] = var;
+        } else {
+            auto alloc = builder.CreateAlloca(type, nullptr, name);
+            if (initializer) {
+                builder.CreateStore(initializer, alloc);
+            }
+            symbolTable[name] = alloc;
         }
-        symbolTable[name] = alloc;
         return Any();
     }
 

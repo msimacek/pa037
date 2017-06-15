@@ -11,7 +11,7 @@ stmtend:        NL+ | ';' NL*;
 
 moduleFile:     (NL | extdecl | importStmt)+;
 
-programFile:    (NL | function | extdecl | importStmt)+;
+programFile:    (NL | function | extdecl | importStmt | declaration stmtend)+;
 
 function:       'def' fndecl (NL+ | 'do' NL*) statements 'end'
         ;
